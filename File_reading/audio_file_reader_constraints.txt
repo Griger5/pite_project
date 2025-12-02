@@ -1,0 +1,5 @@
+pip install librosa
+///pip install soundfile  -- No longer needed as we switched to librosa for audio loading
+
+///To work with other audio file formats
+sudo apt install ffmpeg
