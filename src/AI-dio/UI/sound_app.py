@@ -1,14 +1,26 @@
-from PySide6.QtWidgets import QApplication, QMainWindow, QMessageBox, QWidget
-from PySide6.QtWidgets import QVBoxLayout, QGroupBox, QLabel, QHBoxLayout, QPushButton, QFileDialog
-from PySide6.QtGui import QAction
 import os
 import sys
+
+from PySide6.QtGui import QAction
+from PySide6.QtWidgets import (
+    QApplication,
+    QFileDialog,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QMainWindow,
+    QMessageBox,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+)
+
 
 class SoundApp(QMainWindow):
     def __init__(self):
         super().__init__()
 
-        self.setWindowTitle('The Best Sound App!')
+        self.setWindowTitle("The Best Sound App!")
         self.setFixedSize(600, 400)
 
         self.file_label = QLabel("---")
@@ -19,15 +31,13 @@ class SoundApp(QMainWindow):
         self.layout = QVBoxLayout(self.main_widget)
         self.build_main_interface()
 
-
     def build_menu(self):
-
         exit_action, about_action = self.build_menu_action()
 
         menu_bar = self.menuBar()
 
-        menu_file = menu_bar.addMenu('&File')
-        menu_help = menu_bar.addMenu('&Help')
+        menu_file = menu_bar.addMenu("&File")
+        menu_help = menu_bar.addMenu("&Help")
 
         menu_file.addAction(exit_action)
         menu_help.addAction(about_action)
@@ -35,11 +45,11 @@ class SoundApp(QMainWindow):
         self.statusBar()
 
     def build_menu_action(self):
-        exit_action = QAction('&Exit', self)
-        about_action = QAction('&About', self)
+        exit_action = QAction("&Exit", self)
+        about_action = QAction("&About", self)
 
-        exit_action.setStatusTip('Exit app')
-        about_action.setStatusTip('About app')
+        exit_action.setStatusTip("Exit app")
+        about_action.setStatusTip("About app")
 
         exit_action.triggered.connect(self.close)
         about_action.triggered.connect(self.show_about)
@@ -109,7 +119,9 @@ class SoundApp(QMainWindow):
         self.layout.addWidget(info_box)
 
     def show_load_dialog(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Select Audio File", "", "Audio files (*.wav)")
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select Audio File", "", "Audio files (*.wav)"
+        )
 
         if path:
             self.file_label.setText(os.path.basename(path))
@@ -122,17 +134,18 @@ class SoundApp(QMainWindow):
     @staticmethod
     def show_about():
         msg = QMessageBox()
-        msg.setWindowTitle('About')
+        msg.setWindowTitle("About")
         msg.setText(
             '<p style="margin-left: 20px; font-weight: bold">Authors:</p>'
-            '- <i>Gracjan Adamus</i><br/>'
-            '- <i>Kacper Wojtowicz</i><br/>'
-            '- <i>Jakub Ledwoń</i><br/>'
-            '- <i>Hubert Regec</i><br/>'
+            "- <i>Gracjan Adamus</i><br/>"
+            "- <i>Kacper Wojtowicz</i><br/>"
+            "- <i>Jakub Ledwoń</i><br/>"
+            "- <i>Hubert Regec</i><br/>"
         )
         msg.exec()
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     app = QApplication(sys.argv)
     window = SoundApp()
     window.show()
