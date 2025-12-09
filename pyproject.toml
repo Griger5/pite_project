@@ -25,5 +25,6 @@ dynamic = ["version"]
 dependencies = [
     "numpy",
     "matplotlib",
-    "librosa"
+    "librosa",
+    "pyside6"
 ]
