@@ -1,14 +1,14 @@
 
 # Notes for Developers
 
-## 1. Running the project
+## 1. Setting up the project
 
 ### A. Running inside container (preferred)
 
 Build the docker image:
 
 ```bash
-docker build --tag '<your-image-name>' .
+docker build --tag 'ai-dio:dev' .
 ```
 
 Run the image with necessary flags for graphics forwarding:
@@ -19,42 +19,33 @@ docker run -it \
   --env XAUTHORITY=$XAUTHORITY \
   -v $XAUTHORITY:$XAUTHORITY \
   -v /tmp/.X11-unix:/tmp/.X11-unix \
-  '<your-image-name>'
+  'ai-dio:dev'
 ```
 
 ### B. Running locally
-
-Create and activate a virtual environment for Python:
+Install dev depenendencies:
 
 ```bash
-python -m venv .venv
-source .venv/bin/acitvate
+uv sync --group dev
 ```
 
-Build the project with all dependencies:
+Run project:
 
+```bash
+uv run python3 main.py
 ```
-pip install -e .
-```
+
 
 ## 2. Pre-commit hooks
 
-This project has pre-commit hooks set up. To use them, download `pre-commit`:
-
 ```bash
-pip install pre-commit
-```
-
-And then install the hooks:
-
-```bash
-pre-commit install
+uv run pre-commit install
 ```
 
 After that, linters will run on each commit. You can also run them manually:
 
 ```bash
-pre-commit run --all-files
+uv run pre-commit run --all-files
 ```
 
 ## 3. Pull requests
