@@ -1,0 +1,29 @@
+[tool.isort]
+profile = "black"
+
+[tool.setuptools_scm]
+local_scheme = "no-local-version"
+version_scheme = "post-release"
+
+[build-system]
+requires = ['setuptools==80.9.0', 'setuptools-scm==9.0.1']
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "AI-dio"
+description = "Discern AI audio from real audio"
+license = "MIT"
+readme = "README.md"
+requires-python = ">= 3.8"
+authors = [
+    {name = "Gracjan Adamus"},
+    {name = "Kacper Wojtowicz"},
+    {name = "Hubert Regec"},
+    {name = "Jakub Ledwoń"}
+]     
+dynamic = ["version"]
+dependencies = [
+    "numpy",
+    "matplotlib",
+    "librosa"
+]
