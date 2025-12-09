@@ -1,0 +1,27 @@
+[project]
+name = "ai-dio"
+description = "Discern AI audio from real audio"
+license = "MIT"
+readme = "README.md"
+requires-python = ">= 3.8"
+version = "0.0.1"
+authors = [
+    {name = "Gracjan Adamus"},
+    {name = "Kacper Wojtowicz"},
+    {name = "Hubert Regec"},
+    {name = "Jakub Ledwoń"}
+]     
+dependencies = [
+    "numpy",
+    "matplotlib",
+    "librosa",
+    "pyside6"
+]
+
+
+[dependency-groups]
+dev = [
+    "pre-commit>=3.5.0",
+    "ruff>=0.14.8",
+]
+
