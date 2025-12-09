@@ -1,0 +1,25 @@
+name: pylint
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v2
+      with:
+        submodules: recursive
+    - uses: actions/setup-python@v5
+      with:
+        python-version: 3.13
+    - run: |
+        python -m pip install --upgrade pip
+        pip install pylint
+        pip install -e .
+    - run: pylint --disable=fixme,missing-module-docstring,missing-class-docstring,missing-function-docstring $(git ls-files '*.py')
