@@ -63,8 +63,8 @@ pre-commit run --all-files
 
 Every change should be submitted as a **Pull Request**. This approach enables two things:
 
-- Other developers can review the code
-- Automatic workflows will be ran to test and check the code
+1. Other developers can review the code
+2. Automatic workflows will be ran to test and check the code
 
 **NOTE:** Consider using understandable commit titles, for example:
 
@@ -72,3 +72,9 @@ Every change should be submitted as a **Pull Request**. This approach enables tw
 add: saving output to file
 fix: out-of-bounds bug
 ```
+
+## 4. Miscellaneous
+
+1. All application source files should be inside `/src/AI-dio/` in adequate subdirectories (f.e. `gui`, `audio`, `model`)
+2. Avoid pushing images/audio files/other auxiliary files into the repository
+3. Keep correct naming conventions (PEP8)
