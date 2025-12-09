@@ -1,4 +1,3 @@
-# pip install PySide6
 from PySide6.QtWidgets import QApplication, QMainWindow, QMessageBox, QWidget
 from PySide6.QtWidgets import QVBoxLayout, QGroupBox, QLabel, QHBoxLayout, QPushButton, QFileDialog
 from PySide6.QtGui import QAction
