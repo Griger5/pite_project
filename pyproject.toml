@@ -15,7 +15,11 @@ dependencies = [
     "numpy",
     "matplotlib",
     "librosa",
-    "pyside6"
+    "pyside6",
+    "soundfile>=0.13.1",
+    "ffmpeg>=1.4",
+    "sounddevice>=0.5.3",
+    "pathlib>=1.0.1",
 ]
 
 

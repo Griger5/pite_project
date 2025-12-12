@@ -233,4 +233,8 @@ $RECYCLE.BIN/
 # Windows shortcuts
 *.lnk
 
+#Ingoring samples and output files
+audio_samples/
+audio_output_files/
+
 # End of https://www.toptal.com/developers/gitignore/api/visualstudiocode,python,linux,windows
