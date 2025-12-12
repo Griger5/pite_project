@@ -1,5 +1,6 @@
 import logging
 from pathlib import Path
+from typing import Tuple
 
 import numpy as np
 import sounddevice as sd
@@ -14,7 +15,7 @@ def microphone_input(
     record_sec: int = 5,
     channels: int = 1,
     rate: int = 44100,
-) -> None:
+) -> Tuple[np.ndarray, int]:
     logging.info("Recording...")
     audio: np.ndarray = sd.rec(
         int(record_sec * rate), samplerate=rate, channels=channels, dtype="int16"
@@ -22,6 +23,7 @@ def microphone_input(
     sd.wait()
     logging.info("Finished recording.")
     sf.write(filename, audio, rate)
+    return audio, rate
 
 
 if __name__ == "__main__":
