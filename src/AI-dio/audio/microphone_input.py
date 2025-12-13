@@ -22,5 +22,6 @@ def microphone_input(
     logging.info("Finished recording.")
     return audio, rate
 
+
 if __name__ == "__main__":
     microphone_input()
