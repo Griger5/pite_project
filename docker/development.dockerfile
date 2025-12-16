@@ -36,16 +36,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN ln -s /usr/bin/python3 /usr/bin/python
 
-COPY uv.lock pyproject.toml ./ 
+COPY . . 
 
 ADD https://astral.sh/uv/install.sh /uv-installer.sh
 RUN sh /uv-installer.sh && rm /uv-installer.sh
 ENV PATH="/root/.local/bin/:$PATH"
 
-COPY . . 
-
 RUN uv sync --frozen --no-dev
 
 ENV PATH="/app/.venv/bin:$PATH"
+ENV UV_NO_SYNC=1
 
-CMD ["uv", "run", "python3", "src/AI-dio/UI/sound_app.py"]
+CMD ["uv", "run", "python3", "src/AI_dio/UI/sound_app.py"]
