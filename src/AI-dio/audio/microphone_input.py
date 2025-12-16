@@ -1,0 +1,27 @@
+import logging
+from pathlib import Path
+from typing import Tuple
+
+import numpy as np
+import sounddevice as sd
+
+logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
+ROOT: Path = Path(__file__).resolve().parents[3]
+
+
+def microphone_input(
+    record_sec: int = 5,
+    channels: int = 1,
+    rate: int = 44100,
+) -> Tuple[np.ndarray, int]:
+    logging.info("Recording...")
+    audio: np.ndarray = sd.rec(
+        int(record_sec * rate), samplerate=rate, channels=channels, dtype="int16"
+    )
+    sd.wait()
+    logging.info("Finished recording.")
+    return audio, rate
+
+
+if __name__ == "__main__":
+    microphone_input()
