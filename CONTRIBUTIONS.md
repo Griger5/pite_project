@@ -7,19 +7,24 @@
 
 Build the docker image:
 
+1. Development container:
 ```bash
-docker build --tag 'ai-dio:dev' .
+docker build -f docker/development.dockerfile . -t pite-dev
+```
+2. Training container:
+```bash
+docker build -f docker/training.dockerfile . -t pite-train
 ```
 
-Run the image with necessary flags for graphics forwarding:
+Run the image:
 
+1. Development container:
 ```bash
-docker run -it \
-  --env DISPLAY=$DISPLAY \
-  --env XAUTHORITY=$XAUTHORITY \
-  -v $XAUTHORITY:$XAUTHORITY \
-  -v /tmp/.X11-unix:/tmp/.X11-unix \
-  'ai-dio:dev'
+docker run -it --env DISPLAY=$DISPLAY --env XAUTHORITY=$XAUTHORITY -v $XAUTHORITY:$XAUTHORITY -v /tmp/.X11-unix:/tmp/.X11-unix --gpus all pite-dev:latest
+```
+2. Training container:
+```bash
+docker run -it --gpus all pite-train:latest
 ```
 
 ### B. Running locally

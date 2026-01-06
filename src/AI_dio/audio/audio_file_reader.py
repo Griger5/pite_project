@@ -1,6 +1,6 @@
 import logging
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Tuple
 
 import librosa
 import librosa.display
@@ -80,7 +80,9 @@ def get_sound_parameters(data: np.ndarray, sr: int) -> Dict[str, float]:
     }
 
 
-def read_sound(file: Path = ROOT / "audio_samples/sample-3s.wav") -> np.ndarray:
+def read_sound(
+    file: Path = ROOT / "audio_samples/sample-3s.wav",
+) -> Tuple[np.ndarray, Dict[str, float]]:
     if not file.exists():
         raise FileNotFoundError(f"Audio file not found: {file}")
     audio_data: np.ndarray
@@ -97,8 +99,8 @@ def read_sound(file: Path = ROOT / "audio_samples/sample-3s.wav") -> np.ndarray:
     )
     plot_waveform(audio_data)
     plot_melspectrogram(log_mel, sample_rate)
-    get_sound_parameters(audio_data, sample_rate)
-    return log_mel
+    sound_parameters = get_sound_parameters(audio_data, sample_rate)
+    return log_mel, sound_parameters
 
 
 if __name__ == "__main__":
