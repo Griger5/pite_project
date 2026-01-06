@@ -3,10 +3,6 @@ from pathlib import Path
 
 ROOT: Path = Path(__file__).resolve().parents[3]
 
-from audio_info import AudioInfo
-from controls import Controls
-from header import Header
-from plot_area import PlotArea
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QApplication,
@@ -16,6 +12,11 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from .audio_info import AudioInfo
+from .controls import Controls
+from .header import Header
+from .plot_area import PlotArea
 
 
 class SoundApp(QMainWindow):
