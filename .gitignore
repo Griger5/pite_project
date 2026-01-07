@@ -240,3 +240,7 @@ audio_output_files/
 
 manifest.csv
 data
+wandb
+checkpoints_metadata.json
+checkpoints
+

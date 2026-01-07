@@ -1,0 +1,34 @@
+data:
+  manifest: manifest.csv
+  cache_dir: /data/cache/mel_3s_16k
+  use_cache: true
+
+loader:
+  batch_size: 256
+  num_workers: 8
+  pin_memory: true
+  persistent_workers: true
+  prefetch_factor: 4
+  drop_last: true
+  balanced_sampler: true
+
+train:
+  epochs: 1
+  device: auto
+  clip_grad_norm: 1.0
+
+optim:
+  lr: 0.0003
+  weight_decay: 0.01
+
+metrics:
+  every: 1
+
+wandb:
+  enabled: false
+
+checkpoints:
+  dir: checkpoints
+  save_best: true
+  save_last: true
+  metric: val_loss
