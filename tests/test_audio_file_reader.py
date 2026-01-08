@@ -1,9 +1,11 @@
 import numpy as np
 import pytest
+import soundfile as sf
 
 from src.AI_dio.audio.audio_file_reader import (
     compute_log_mel_spectrogram,
     get_sound_parameters,
+    read_sound,
 )
 
 
@@ -36,3 +38,25 @@ def test_sound_parameters_values():
     assert pytest.approx(params["avg_volume"], 0.01) == 0.5
     assert pytest.approx(params["peak_amplitude"], 0.01) == 0.5
     assert pytest.approx(params["loudness_db"], 0.01) == -6.02
+
+
+def test_read_sound_empty_file(tmp_path):
+    empty_file = tmp_path / "empty.wav"
+    empty_file.touch()
+    with pytest.raises(ValueError, match="Audio file is empty"):
+        read_sound(empty_file)
+
+
+def test_read_sound_corrupted_file(tmp_path):
+    corrupted = tmp_path / "corrupted.wav"
+    corrupted.write_bytes(b"\x00\xff\x00\xffNOTAUDIO")
+    with pytest.raises(ValueError, match="Failed to load audio"):
+        read_sound(corrupted)
+
+
+def test_read_sound_very_short_file(tmp_path):
+    short = tmp_path / "short.wav"
+    data = np.array([0.0], dtype=np.float32)
+    sf.write(short, data, 44100)
+    with pytest.raises(ValueError, match="Audio file too short"):
+        read_sound(short)

@@ -85,9 +85,18 @@ def read_sound(
 ) -> Tuple[np.ndarray, Dict[str, float]]:
     if not file.exists():
         raise FileNotFoundError(f"Audio file not found: {file}")
+    if file.stat().st_size == 0:
+        raise ValueError(f"Audio file is empty: {file}")
     audio_data: np.ndarray
     sample_rate: int
-    audio_data, sample_rate = librosa.load(str(file), sr=None, mono=True)
+    try:
+        audio_data, sample_rate = librosa.load(str(file), sr=None, mono=True)
+    except Exception as e:
+        raise ValueError(f"Failed to load audio file: {file}") from e
+    if len(audio_data) < 2048:
+        raise ValueError(
+            f"Audio file too short: {len(audio_data)} samples, need at least 2048"
+        )
     logging.info(f"Number of samples: {len(audio_data)}")
     logging.info(f"Sampling rate: {sample_rate}")
     log_mel = compute_log_mel_spectrogram(
