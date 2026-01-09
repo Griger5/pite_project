@@ -1,8 +1,6 @@
 import sys
 from pathlib import Path
 
-ROOT: Path = Path(__file__).resolve().parents[3]
-
 from audio_info import AudioInfo
 from controls import Controls
 from header import Header
@@ -16,6 +14,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+ROOT: Path = Path(__file__).resolve().parents[3]
 
 
 class SoundApp(QMainWindow):

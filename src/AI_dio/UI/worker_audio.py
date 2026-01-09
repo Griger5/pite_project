@@ -3,8 +3,8 @@ from pathlib import Path
 import numpy as np
 from PySide6.QtCore import QObject, Signal
 
-from src.AI_dio.audio.audio_file_reader import get_sound_parameters, read_sound
-from src.AI_dio.audio.microphone_input import microphone_input
+from AI_dio.audio.audio_file_reader import get_sound_parameters, read_sound
+from AI_dio.audio.microphone_input import microphone_input
 
 
 class WorkerAudio(QObject):

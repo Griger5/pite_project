@@ -9,8 +9,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-
-from src.AI_dio.UI.worker_audio import WorkerAudio
+from worker_audio import WorkerAudio
 
 
 class Controls(QWidget):
