@@ -99,19 +99,20 @@ def read_sound(
         raise ValueError(
             f"Audio file too short: {len(audio_data)} samples, need at least 2048"
         )
-    log_mel = compute_log_mel_spectrogram(
-        audio_data,
-        sample_rate,
-        mel_band_num=128,
-        sample_frame_length=2048,
-        hop_length=512,
-    )
+
     if plot_waveform_flag:
         plot_waveform(audio_data)
     if plot_melspectrogram_flag:
+        log_mel = compute_log_mel_spectrogram(
+            audio_data,
+            sample_rate,
+            mel_band_num=128,
+            sample_frame_length=2048,
+            hop_length=512,
+        )
         plot_melspectrogram(log_mel, sample_rate)
     sound_parameters = get_sound_parameters(audio_data, sample_rate)
-    return log_mel, sound_parameters
+    return audio_data, sound_parameters
 
 
 if __name__ == "__main__":
