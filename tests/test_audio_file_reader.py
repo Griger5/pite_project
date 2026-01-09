@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 import soundfile as sf
 
-from src.AI_dio.audio.audio_file_reader import (
+from AI_dio.audio.audio_file_reader import (
     compute_log_mel_spectrogram,
     get_sound_parameters,
     read_sound,

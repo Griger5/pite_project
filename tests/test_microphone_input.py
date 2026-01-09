@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 import sounddevice as sd
 
-from src.AI_dio.audio.microphone_input import microphone_input
+from AI_dio.audio.microphone_input import microphone_input
 
 
 def test_microphone_input_params(monkeypatch):
