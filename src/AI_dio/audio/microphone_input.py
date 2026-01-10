@@ -16,7 +16,7 @@ def microphone_input(
 ) -> Tuple[np.ndarray, int]:
     logging.info("Recording...")
     audio: np.ndarray = sd.rec(
-        int(record_sec * rate), samplerate=rate, channels=channels, dtype="int16"
+        int(record_sec * rate), samplerate=rate, channels=channels, dtype="float32"
     )
     sd.wait()
     logging.info("Finished recording.")
