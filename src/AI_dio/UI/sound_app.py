@@ -95,28 +95,24 @@ class SoundApp(QMainWindow):
             f"{sound_params['loudness_db']:.2f} dB"
         )
 
-    def update_plots(self, is_plot):
-        if is_plot:
-            self.plot_area.update_waveform(
-                Path(f"{ROOT}/audio_output_files/waveform.png")
-            )
-            self.plot_area.update_spectrogram(
-                Path(f"{ROOT}/audio_output_files/spectrogram.png")
-            )
+    def update_plots(self):
+        self.plot_area.update_waveform(Path(f"{ROOT}/audio_output_files/waveform.png"))
+        self.plot_area.update_spectrogram(
+            Path(f"{ROOT}/audio_output_files/spectrogram.png")
+        )
 
-    def reset_info(self, is_reset: bool):
-        if is_reset:
-            self.controls.file_path = None
-            self.controls.is_microphone_used = None
-            self.header.file_name_label.setText("---")
-            self.header.status_name_label.setText("---")
-            self.audio_info.sample_rate_value_label.setText("---")
-            self.audio_info.duration_value_label.setText("---")
-            self.audio_info.volume_value_label.setText("---")
-            self.audio_info.peak_amplitude_label.setText("---")
-            self.audio_info.loudness_value_label.setText("---")
-            self.plot_area.waveform_label.clear()
-            self.plot_area.spectrogram_label.clear()
+    def reset_info(self):
+        self.controls.file_path = None
+        self.controls.is_microphone_used = None
+        self.header.file_name_label.setText("---")
+        self.header.status_name_label.setText("---")
+        self.audio_info.sample_rate_value_label.setText("---")
+        self.audio_info.duration_value_label.setText("---")
+        self.audio_info.volume_value_label.setText("---")
+        self.audio_info.peak_amplitude_label.setText("---")
+        self.audio_info.loudness_value_label.setText("---")
+        self.plot_area.waveform_label.clear()
+        self.plot_area.spectrogram_label.clear()
 
     @staticmethod
     def show_about():
