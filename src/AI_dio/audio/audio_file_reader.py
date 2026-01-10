@@ -4,11 +4,13 @@ from typing import Dict, Tuple
 
 import librosa
 import librosa.display
+import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 ROOT: Path = Path(__file__).resolve().parents[3]
+matplotlib.use("agg")
 
 
 def plot_waveform(
@@ -82,37 +84,25 @@ def get_sound_parameters(data: np.ndarray, sr: int) -> Dict[str, float]:
 
 def read_sound(
     file: Path = ROOT / "audio_samples/sample-3s.wav",
-    plot_waveform_flag: bool = True,
-    plot_melspectrogram_flag: bool = True,
 ) -> Tuple[np.ndarray, Dict[str, float]]:
     if not file.exists():
         raise FileNotFoundError(f"Audio file not found: {file}")
-    if file.stat().st_size == 0:
-        raise ValueError(f"Audio file is empty: {file}")
     audio_data: np.ndarray
     sample_rate: int
-    try:
-        audio_data, sample_rate = librosa.load(str(file), sr=None, mono=True)
-    except Exception as e:
-        raise ValueError(f"Failed to load audio file: {file}") from e
-    if len(audio_data) < 2048:
-        raise ValueError(
-            f"Audio file too short: {len(audio_data)} samples, need at least 2048"
-        )
-
-    if plot_waveform_flag:
-        plot_waveform(audio_data)
-    if plot_melspectrogram_flag:
-        log_mel = compute_log_mel_spectrogram(
-            audio_data,
-            sample_rate,
-            mel_band_num=128,
-            sample_frame_length=2048,
-            hop_length=512,
-        )
-        plot_melspectrogram(log_mel, sample_rate)
+    audio_data, sample_rate = librosa.load(str(file), sr=None, mono=True)
+    logging.info(f"Number of samples: {len(audio_data)}")
+    logging.info(f"Sampling rate: {sample_rate}")
+    log_mel = compute_log_mel_spectrogram(
+        audio_data,
+        sample_rate,
+        mel_band_num=128,
+        sample_frame_length=2048,
+        hop_length=512,
+    )
+    plot_waveform(audio_data)
+    plot_melspectrogram(log_mel, sample_rate)
     sound_parameters = get_sound_parameters(audio_data, sample_rate)
-    return audio_data, sound_parameters
+    return log_mel, sound_parameters
 
 
 if __name__ == "__main__":
