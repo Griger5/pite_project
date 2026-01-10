@@ -4,11 +4,13 @@ from typing import Dict, Tuple
 
 import librosa
 import librosa.display
+import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 ROOT: Path = Path(__file__).resolve().parents[3]
+matplotlib.use("agg")
 
 
 def plot_waveform(
