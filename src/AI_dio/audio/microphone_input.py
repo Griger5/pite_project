@@ -19,6 +19,8 @@ def microphone_input(
         int(record_sec * rate), samplerate=rate, channels=channels, dtype="float32"
     )
     sd.wait()
+    if audio.ndim == 2:
+        audio = audio.mean(axis=1)
     logging.info("Finished recording.")
     return audio, rate
 
