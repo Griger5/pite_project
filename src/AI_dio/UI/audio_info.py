@@ -22,7 +22,7 @@ class AudioInfo(QWidget):
         self.duration_value_label = QLabel("---")
 
         volume_label = QLabel("RMS (Volume): ")
-        volume_label.setFixedWidth(78)
+        volume_label.setFixedWidth(77)
         self.volume_value_label = QLabel("---")
         self.volume_value_label.setFixedWidth(60)
 

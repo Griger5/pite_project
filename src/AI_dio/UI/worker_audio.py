@@ -19,6 +19,7 @@ class WorkerAudio(QObject):
     signal_update_plots = Signal()
     signal_reset = Signal()
     signal_finished = Signal()
+    signal_reset_info = Signal()
 
     def __init__(self, is_microphone_used, file_path):
         super().__init__()
@@ -29,6 +30,7 @@ class WorkerAudio(QObject):
     def run_analysis(self):
         try:
             if self.is_microphone_used:
+                self.signal_reset_info.emit()
                 full_audio = None
                 while self.is_recording:
                     self.signal_status.emit("Recording...")

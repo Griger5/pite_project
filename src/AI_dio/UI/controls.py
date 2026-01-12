@@ -23,6 +23,7 @@ class Controls(QWidget):
     signal_reset = Signal()
     signal_audio_info = Signal(object)
     signal_update_plots = Signal()
+    signal_reset_info = Signal()
 
     def __init__(self):
         super().__init__()
@@ -52,7 +53,8 @@ class Controls(QWidget):
 
         self.button_load_file = QPushButton("Load File")
         self.button_use_microphone = QPushButton("Use microphone")
-        self.button_start_stop = QPushButton("Start")
+        self.button_start = QPushButton("Start")
+        self.button_controls_stop = QPushButton("Stop")
         self.button_reset = QPushButton("Reset")
         self.current_time_label = QLabel("0:00")
         self.media_slider = QSlider(Qt.Horizontal)
@@ -66,10 +68,12 @@ class Controls(QWidget):
 
         self.set_media_enabled(False)
         self.button_pause.setHidden(True)
+        self.button_controls_stop.setHidden(True)
 
         self.button_load_file.clicked.connect(self.show_load_dialog)
         self.button_use_microphone.clicked.connect(self.microphone_in_use)
-        self.button_start_stop.clicked.connect(self.start_stop_audio)
+        self.button_start.clicked.connect(self.start_audio)
+        self.button_controls_stop.clicked.connect(self.stop_audio)
         self.button_reset.clicked.connect(lambda: self.signal_reset.emit())
         self.button_play.clicked.connect(self.on_play_button)
         self.button_pause.clicked.connect(self.on_pause_button)
@@ -80,7 +84,8 @@ class Controls(QWidget):
 
         sound_source_layout.addWidget(self.button_load_file)
         sound_source_layout.addWidget(self.button_use_microphone)
-        app_controls_layout.addWidget(self.button_start_stop)
+        app_controls_layout.addWidget(self.button_start)
+        app_controls_layout.addWidget(self.button_controls_stop)
         app_controls_layout.addWidget(self.button_reset)
 
         slider_layout.addWidget(self.current_time_label)
@@ -126,8 +131,10 @@ class Controls(QWidget):
         self.button_load_file.setEnabled(option)
         self.button_use_microphone.setEnabled(option)
         self.button_reset.setEnabled(option)
+        self.button_start.setEnabled(option)
+
         if not self.is_microphone_used:
-            self.button_start_stop.setEnabled(option)
+            self.button_controls_stop.setEnabled(option)
 
     def set_media_enabled(self, option: bool):
         self.media_slider.setEnabled(option)
@@ -167,32 +174,36 @@ class Controls(QWidget):
         minutes, seconds = self.convert_to_time(duration)
         self.max_time_label.setText(f"{minutes}:{seconds:02d}")
 
-    def start_stop_audio(self):
-        if self.worker_audio is None:
-            self.set_buttons_enabled(False)
+    def start_audio(self):
+        self.set_buttons_enabled(False)
 
-            self.thread = QThread()
-            self.worker_audio = WorkerAudio(self.is_microphone_used, self.file_path)
-            self.worker_audio.moveToThread(self.thread)
+        self.thread = QThread()
+        self.worker_audio = WorkerAudio(self.is_microphone_used, self.file_path)
+        self.worker_audio.moveToThread(self.thread)
 
-            self.thread.started.connect(self.worker_audio.run_analysis)
+        self.thread.started.connect(self.worker_audio.run_analysis)
 
-            self.worker_audio.signal_status.connect(self.signal_status)
-            self.worker_audio.signal_audio_info.connect(self.signal_audio_info)
-            self.worker_audio.signal_update_plots.connect(self.signal_update_plots)
-            self.worker_audio.signal_reset.connect(self.signal_reset)
+        self.worker_audio.signal_status.connect(self.signal_status)
+        self.worker_audio.signal_audio_info.connect(self.signal_audio_info)
+        self.worker_audio.signal_update_plots.connect(self.signal_update_plots)
+        self.worker_audio.signal_reset.connect(self.signal_reset)
+        self.worker_audio.signal_reset_info.connect(self.signal_reset_info)
 
-            self.worker_audio.signal_finished.connect(
-                lambda: self.set_buttons_enabled(True)
-            )
-            self.worker_audio.signal_finished.connect(self.thread.quit)
-            self.worker_audio.signal_finished.connect(self.worker_audio.deleteLater)
-            self.thread.finished.connect(self.thread.deleteLater)
+        self.worker_audio.signal_finished.connect(
+            lambda: self.set_buttons_enabled(True)
+        )
+        self.worker_audio.signal_finished.connect(self.thread.quit)
+        self.worker_audio.signal_finished.connect(self.worker_audio.deleteLater)
+        self.thread.finished.connect(self.thread.deleteLater)
 
-            self.thread.start()
-            if self.is_microphone_used:
-                self.button_start_stop.setText("Stop")
-        else:
-            self.worker_audio.is_recording = False
-            self.button_start_stop.setText("Start")
-            self.worker_audio = None
+        self.thread.start()
+
+        if self.is_microphone_used:
+            self.button_start.setHidden(True)
+            self.button_controls_stop.setHidden(False)
+
+    def stop_audio(self):
+        self.worker_audio.is_recording = False
+        self.button_start.setHidden(False)
+        self.button_controls_stop.setHidden(True)
+        self.worker_audio = None
