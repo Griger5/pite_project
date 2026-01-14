@@ -3,7 +3,13 @@ from pathlib import Path
 import numpy as np
 from PySide6.QtCore import QObject, Signal
 
-from AI_dio.audio.audio_file_reader import get_sound_parameters, read_sound
+from AI_dio.audio.audio_file_reader import (
+    compute_log_mel_spectrogram,
+    get_sound_parameters,
+    plot_melspectrogram,
+    plot_waveform,
+    read_sound,
+)
 from AI_dio.audio.microphone_input import microphone_input
 
 
@@ -13,6 +19,7 @@ class WorkerAudio(QObject):
     signal_update_plots = Signal()
     signal_reset = Signal()
     signal_finished = Signal()
+    signal_reset_info = Signal()
 
     def __init__(self, is_microphone_used, file_path):
         super().__init__()
@@ -23,6 +30,7 @@ class WorkerAudio(QObject):
     def run_analysis(self):
         try:
             if self.is_microphone_used:
+                self.signal_reset_info.emit()
                 full_audio = None
                 while self.is_recording:
                     self.signal_status.emit("Recording...")
@@ -32,6 +40,10 @@ class WorkerAudio(QObject):
                     else:
                         full_audio = np.concatenate((full_audio, audio))
                     sound_params = get_sound_parameters(full_audio, rate)
+                    plot_waveform(full_audio)
+                    log_mel = compute_log_mel_spectrogram(full_audio, rate)
+                    plot_melspectrogram(log_mel, rate)
+                    self.signal_update_plots.emit()
                     self.signal_audio_info.emit(sound_params)
 
                 self.signal_status.emit("Recording ended")
