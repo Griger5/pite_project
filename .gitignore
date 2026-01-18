@@ -237,6 +237,7 @@ $RECYCLE.BIN/
 # Ignoring samples and output files
 audio_samples/
 audio_output_files/
+docs/
 
 manifest.csv
 wandb
