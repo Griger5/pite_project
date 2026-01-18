@@ -1,401 +1,782 @@
+import argparse
 import csv
-import os
+import hashlib
 import random
+import zipfile
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterable, Optional
+from typing import Optional
 
 from tqdm import tqdm
 
 ROOT = Path(__file__).parents[3].resolve()
 RAW_DATA_DIR = ROOT / "data" / "raw"
-FoR_DIR = RAW_DATA_DIR / "for-norm"
-CODECFAKE_PLUS_DIR = RAW_DATA_DIR / "CodecFakePlus"
-CODECFAKE_PLUS_CORS_DIR = CODECFAKE_PLUS_DIR / "Codecfake_plus_CoRS"
-CODECFAKE_PLUS_COSG_DIR = CODECFAKE_PLUS_DIR / "CoSG"
-CODECFAKE_PLUS_CORS_LABELS = CODECFAKE_PLUS_DIR / "CoRS_labels.txt"
-CODECFAKE_PLUS_COSG_LABELS = CODECFAKE_PLUS_DIR / "CoSG_labels.txt"
-CODECFAKE_SPLIT_RATIO = (0.8, 0.1, 0.1)
+DFADD_DIR = RAW_DATA_DIR / "dfadd"
+MLAAD_DIR = RAW_DATA_DIR / "mlaad_tiny"
+ML_DF_DIR = RAW_DATA_DIR / "ml-df"
+IN_THE_WILD_DIR = RAW_DATA_DIR / "in_the_wild"
+IN_THE_WILD_ZIP = IN_THE_WILD_DIR / "release_in_the_wild.zip"
+DFADD_AUDIO_DIR = DFADD_DIR / "audio"
 
 AUDIO_EXTS = {".wav", ".flac"}
+SPLIT_RATIO = (0.8, 0.1, 0.1)
+SPLIT_SEED = 1337
+VAL_RATIO = 0.1
+
+SPLIT_MAP = {
+    "train": "train",
+    "trn": "train",
+    "dev": "val",
+    "val": "val",
+    "valid": "val",
+    "validation": "val",
+    "test": "test",
+    "eval": "test",
+}
+
+EN_TOKENS = {"en", "eng", "english"}
+DE_TOKENS = {"de", "deu", "ger", "german"}
+
+IN_THE_WILD_SUBDIR = "release_in_the_wild"
+IN_THE_WILD_META = "meta.csv"
+IN_THE_WILD_AUDIO_EXTS = {".wav", ".flac"}
 
 
-class ManifestBuilder:
-    def __init__(self) -> None:
-        self._rows: list[dict] = []
-        self._codecfake_label_cache: dict[Path, dict[str, int]] = {}
+@dataclass
+class DatasetConfig:
+    name: str
+    data_dir: Path
+    label_candidates: tuple[str, ...]
+    path_candidates: tuple[str, ...]
+    split_candidates: tuple[str, ...]
+    speaker_candidates: tuple[str, ...]
+    system_candidates: tuple[str, ...]
+    language_candidates: tuple[str, ...]
+    force_language_split: bool = False
 
-    def group_id_from_filename_for(self, fn: Path) -> str:
-        name = fn.name
-        suffix = ".wav_16k.wav_norm.wav_mono.wav_silence.wav"
-        if name.endswith(suffix):
-            return name[: -len(suffix)] + ".wav"
-        if ".wav_" in name:
-            return name.split(".wav_", 1)[0] + ".wav"
-        return fn.stem
 
-    def determine_cls_from_filepath_for(self, fp: Path) -> int:
-        if any(p.lower() == "real" for p in fp.parts):
+def _normalize_split(value: str) -> str:
+    return SPLIT_MAP.get(str(value).strip().lower(), str(value).strip().lower())
+
+
+def _normalize_label(value) -> int:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, (int, float)):
+        if int(value) in (0, 1):
+            return int(value)
+    if isinstance(value, str):
+        norm = value.strip().lower()
+        if norm in {"0", "1"}:
+            return int(norm)
+        if norm in {"bonafide", "bona-fide", "real", "genuine", "human"}:
             return 0
-        if any(p.lower() == "fake" for p in fp.parts):
+        if norm in {"spoof", "spoofed", "fake", "attack", "synthetic", "ai"}:
             return 1
-        raise ValueError(f"Can't infer label (real/fake) from path: {fp}")
+    raise ValueError(f"Unrecognized label: {value!r}")
 
-    def _normalize_codecfake_label(self, label: str) -> int:
-        norm = label.strip().lower()
-        if norm in {"bonafide", "real"}:
-            return 0
-        if norm in {"spoof", "fake"}:
-            return 1
-        raise ValueError(f"Unknown CodecFakePlus label: {label!r}")
 
-    def _load_codecfake_label_map(self, labels_path: Path) -> dict[str, int]:
-        labels_path = Path(labels_path).resolve()
-        cached = self._codecfake_label_cache.get(labels_path)
-        if cached is not None:
-            return cached
+def _normalize_ml_df_label(tool: str) -> int:
+    norm = tool.strip().lower()
+    if norm in {"bonafide", "bona-fide", "real"}:
+        return 0
+    if norm in {"spoof", "fake"}:
+        return 1
+    return 1
 
-        mapping: dict[str, int] = {}
-        with open(labels_path, "r", encoding="utf-8") as f:
-            for line_no, line in enumerate(f, start=1):
-                parts = line.strip().split()
-                if not parts:
-                    continue
-                if labels_path.name == "CoRS_labels.txt":
-                    if len(parts) < 3:
-                        raise ValueError(
-                            f"Malformed CoRS label at line {line_no}: {line!r}"
-                        )
-                    file_name = parts[1]
-                    label = self._normalize_codecfake_label(parts[2])
-                elif labels_path.name == "CoSG_labels.txt":
-                    if len(parts) < 6:
-                        raise ValueError(
-                            f"Malformed CoSG label at line {line_no}: {line!r}"
-                        )
-                    file_name = parts[1]
-                    if not file_name.endswith(".wav"):
-                        file_name = f"{file_name}.wav"
-                    label = self._normalize_codecfake_label(parts[-1])
-                else:
-                    raise ValueError(f"Unknown CodecFakePlus label file: {labels_path}")
 
-                existing = mapping.get(file_name)
-                if existing is not None and existing != label:
-                    raise ValueError(
-                        "Conflicting CodecFakePlus labels for "
-                        f"{file_name!r}: {existing} vs {label}"
-                    )
-                mapping[file_name] = label
+def _language_from_wav_path(wav_file: str) -> str:
+    p = Path(wav_file)
+    if p.parts:
+        first = p.parts[0]
+        if first.startswith("dataset_"):
+            return first.split("_", 1)[1]
+    stem = p.stem
+    if "_" in stem:
+        return stem.split("_", 1)[0]
+    return "unknown"
 
-        self._codecfake_label_cache[labels_path] = mapping
-        return mapping
 
-    def _group_id_from_codecfake_cors_name(self, file_name: str) -> str:
-        stem = Path(file_name).stem
-        parts = stem.split("_")
-        if len(parts) >= 2:
-            return "_".join(parts[:2]) + ".wav"
-        return f"{stem}.wav"
-
-    def _group_id_from_codecfake_cosg_name(self, file_name: str) -> str:
-        stem = Path(file_name).stem
-        return f"{stem}.wav"
-
-    def add_rows_from_codecfake_labels(
-        self,
-        audio_root: Path,
-        labels_path: Path,
-        *,
-        split_name: str = "train",
-        split_ratio: tuple[float, float, float] | None = None,
-        split_seed: int | None = None,
-        source_name: str,
-        group_id_from_name: Callable[[str], str],
-    ) -> None:
-        label_map = self._load_codecfake_label_map(labels_path)
-        items: list[tuple[Path, int, str]] = []
-        for file_name, label in tqdm(
-            label_map.items(), desc=f"{source_name}:scan", total=len(label_map)
-        ):
-            p = audio_root / file_name
-            if not (p.is_file() and p.suffix.lower() in AUDIO_EXTS):
+def _iter_metadata_rows(metadata_path: Path) -> list[dict]:
+    rows: list[dict] = []
+    with metadata_path.open("r", encoding="utf-8") as f:
+        header = f.readline().strip().split()
+        expected = ["wav_file", "tool", "gender", "group", "speaker"]
+        if header[: len(expected)] != expected:
+            raise ValueError(f"Unexpected metadata header in {metadata_path}: {header}")
+        for line_no, line in enumerate(f, start=2):
+            parts = line.strip().split()
+            if not parts:
                 continue
-            group_id = group_id_from_name(file_name)
-            items.append((p, int(label), group_id))
-
-        if split_ratio is not None:
-            if len(split_ratio) != 3:
-                raise ValueError("split_ratio must be a 3-tuple (train,val,test).")
-            if any(r < 0 for r in split_ratio):
-                raise ValueError("split_ratio values must be >= 0.")
-            total_ratio = sum(split_ratio)
-            if abs(total_ratio - 1.0) > 1e-6:
-                raise ValueError("split_ratio must sum to 1.0.")
-
-            groups: dict[str, list[tuple[Path, int, str]]] = {}
-            for p, label, group_id in items:
-                groups.setdefault(group_id, []).append((p, label, group_id))
-
-            rng = (
-                random.Random(split_seed) if split_seed is not None else random.Random()
-            )
-            group_ids = sorted(groups.keys())
-            rng.shuffle(group_ids)
-            n_total = len(group_ids)
-            n_train = int(n_total * split_ratio[0])
-            n_val = int(n_total * split_ratio[1])
-            train_g = set(group_ids[:n_train])
-            val_g = set(group_ids[n_train : n_train + n_val])
-
-            for group_id in tqdm(group_ids, desc=f"{source_name}:split"):
-                if group_id in train_g:
-                    split_name = "train"
-                elif group_id in val_g:
-                    split_name = "val"
-                else:
-                    split_name = "test"
-                for p, label, _ in groups[group_id]:
-                    self._rows.append(
-                        {
-                            "path": str(p.resolve()),
-                            "label": str(label),
-                            "split": split_name,
-                            "source": source_name,
-                            "group_id": group_id,
-                        }
-                    )
-            return
-
-        for p, label, group_id in items:
-            self._rows.append(
+            if len(parts) < 5:
+                raise ValueError(
+                    f"Malformed metadata row at {metadata_path}:{line_no}: {line!r}"
+                )
+            wav_file, tool, gender, group, speaker = parts[:5]
+            rows.append(
                 {
-                    "path": str(p.resolve()),
-                    "label": str(label),
+                    "wav_file": wav_file,
+                    "tool": tool,
+                    "gender": gender,
+                    "group": group,
+                    "speaker": speaker,
+                }
+            )
+    return rows
+
+
+def _rows_from_ml_df(ml_df_dir: Path) -> list[dict]:
+    metadata_files = sorted(ml_df_dir.glob("metadata_*.csv"))
+    if not metadata_files:
+        raise FileNotFoundError(f"No metadata_*.csv found in {ml_df_dir}")
+
+    def _speaker_seed(speaker: str) -> int:
+        digest = hashlib.md5(speaker.encode("utf-8")).hexdigest()
+        return SPLIT_SEED + int(digest[:8], 16)
+
+    def _split_it_records(records: list[dict]) -> dict[str, str]:
+        by_speaker: dict[str, list[dict]] = {}
+        for record in records:
+            by_speaker.setdefault(str(record["speaker"]), []).append(record)
+
+        split_map: dict[str, str] = {}
+        for speaker, items in by_speaker.items():
+            rng = random.Random(_speaker_seed(speaker))
+            items = list(items)
+            rng.shuffle(items)
+            n_total = len(items)
+            n_val = int(round(n_total * SPLIT_RATIO[1]))
+            n_test = 0
+            n_train = max(n_total - n_val, 0)
+            train_items = items[:n_train]
+            val_items = items[n_train : n_train + n_val]
+            test_items = []
+            for record in train_items:
+                split_map[record["wav_file"]] = "train"
+            for record in val_items:
+                split_map[record["wav_file"]] = "val"
+            for record in test_items:
+                split_map[record["wav_file"]] = "test"
+        return split_map
+
+    rows: list[dict] = []
+    missing = 0
+    total = 0
+    for metadata_path in metadata_files:
+        records = _iter_metadata_rows(metadata_path)
+        it_split_map = None
+        if metadata_path.stem.endswith("_IT"):
+            it_split_map = _split_it_records(records)
+        for record in tqdm(
+            records, desc=f"ml-df:{metadata_path.name}", total=len(records)
+        ):
+            total += 1
+            wav_file = record["wav_file"]
+            wav_path = ml_df_dir / wav_file
+            if not (wav_path.is_file() and wav_path.suffix.lower() in AUDIO_EXTS):
+                missing += 1
+                continue
+            language = _language_from_wav_path(wav_file)
+            speaker = record["speaker"]
+            group_id = f"{language}_{speaker}"
+            if language == "IT" and it_split_map is not None:
+                split_name = it_split_map.get(wav_file, "train")
+            else:
+                split_name = _normalize_split(record["group"])
+            rows.append(
+                {
+                    "path": str(wav_path.resolve()),
+                    "label": str(_normalize_ml_df_label(record["tool"])),
                     "split": split_name,
-                    "source": source_name,
+                    "source": "ML-DF",
                     "group_id": group_id,
+                    "tool": record["tool"],
+                    "gender": record["gender"],
+                    "speaker": speaker,
+                    "language": language,
+                    "wav_file": wav_file,
                 }
             )
+    if missing:
+        print(f"[warn] skipped {missing}/{total} missing audio files in ML-DF.")
+    return rows
 
-    def _expand_pattern(self, pattern: str) -> list[Path]:
-        return [p for p in Path().glob(pattern)]
 
-    def _matches_are_audio(self, matches: list[Path]) -> bool:
-        return any(m.is_file() and m.suffix.lower() in AUDIO_EXTS for m in matches)
+def _dedupe_rows(rows: list[dict]) -> list[dict]:
+    seen = set()
+    deduped = []
+    for r in rows:
+        if r["path"] in seen:
+            continue
+        seen.add(r["path"])
+        deduped.append(r)
+    return deduped
 
-    def _rows_from_wav_files(
-        self,
-        matches: list[Path],
-        *,
-        source_name: str,
-        split_name: str,
-        group_id_from_name: Callable[[Path], str],
-        determine_cls_from_filepath: Callable[[Path], int],
-    ) -> Iterable[dict]:
-        for p in tqdm(matches, desc=f"{source_name}:{split_name}"):
-            if not (p.is_file() and p.suffix.lower() in AUDIO_EXTS):
+
+def _first_present(columns: list[str], candidates: tuple[str, ...]) -> Optional[str]:
+    for c in candidates:
+        if c in columns:
+            return c
+    return None
+
+
+def _extract_path(value, data_dir: Path) -> Optional[str]:
+    path_value = value
+    if isinstance(value, dict) and "path" in value:
+        path_value = value["path"]
+    if not path_value:
+        return None
+    p = Path(str(path_value))
+    if not p.is_absolute():
+        p = data_dir / p
+    return str(p.resolve())
+
+
+def _infer_language_from_path(path: str) -> Optional[str]:
+    parts = [p.lower() for p in Path(path).parts]
+    for token in parts:
+        if token in EN_TOKENS:
+            return "en"
+        if token in DE_TOKENS:
+            return "de"
+    stem = Path(path).stem.lower()
+    for token in stem.split("_") + stem.split("-"):
+        if token in EN_TOKENS:
+            return "en"
+        if token in DE_TOKENS:
+            return "de"
+    return None
+
+
+def _group_id(
+    label: int, speaker: Optional[str], tts_system: Optional[str]
+) -> Optional[str]:
+    if label == 1 and tts_system:
+        return f"tts:{tts_system}"
+    if speaker:
+        return f"spk:{speaker}"
+    if tts_system:
+        return f"tts:{tts_system}"
+    return None
+
+
+def _find_parquet_files(data_dir: Path) -> list[Path]:
+    if not data_dir.exists():
+        return []
+    files = sorted(data_dir.rglob("*.parquet"))
+    return files
+
+
+def _resolve_parquet_root(data_dir: Path) -> Path:
+    if _find_parquet_files(data_dir):
+        return data_dir
+    nested = data_dir / "data"
+    if _find_parquet_files(nested):
+        return nested
+    return data_dir
+
+
+def _load_parquet_dir(data_dir: Path):
+    try:
+        from datasets import Dataset, DatasetDict, load_dataset
+    except Exception as exc:
+        raise RuntimeError(
+            "Loading parquet manifests requires the 'datasets' package."
+        ) from exc
+
+    parquet_root = _resolve_parquet_root(data_dir)
+    parquet_files = _find_parquet_files(parquet_root)
+    if not parquet_files:
+        raise FileNotFoundError(f"No parquet files found under {data_dir}")
+    split_files: dict[str, list[str]] = {"train": [], "test": [], "validation": []}
+    for fp in parquet_files:
+        name = fp.name.lower()
+        if "train" in name:
+            split_files["train"].append(str(fp))
+        elif "test" in name:
+            split_files["test"].append(str(fp))
+        elif "valid" in name or "val" in name or "dev" in name:
+            split_files["validation"].append(str(fp))
+    data_files = {k: v for k, v in split_files.items() if v}
+    ds = load_dataset(
+        "parquet", data_files=data_files or [str(p) for p in parquet_files]
+    )
+    if isinstance(ds, DatasetDict):
+        return ds
+    if isinstance(ds, Dataset):
+        return DatasetDict({"train": ds})
+    raise TypeError(f"Unsupported dataset type from {data_dir}: {type(ds)}")
+
+
+def _rows_from_dataset(ds_dict, cfg: DatasetConfig) -> list[dict]:
+    rows: list[dict] = []
+    skipped = 0
+    total = 0
+    for split_name, ds in ds_dict.items():
+        columns = list(getattr(ds, "column_names", []))
+        label_col = _first_present(columns, cfg.label_candidates)
+        path_col = _first_present(columns, cfg.path_candidates)
+        split_col = _first_present(columns, cfg.split_candidates)
+        speaker_col = _first_present(columns, cfg.speaker_candidates)
+        system_col = _first_present(columns, cfg.system_candidates)
+        language_col = _first_present(columns, cfg.language_candidates)
+        if not label_col or not path_col:
+            raise ValueError(
+                f"{cfg.name}: missing label/path column (label={label_col}, path={path_col}). "
+                f"Columns: {columns}"
+            )
+        for row in tqdm(
+            ds,
+            total=len(ds),
+            desc=f"{cfg.name}:{split_name}",
+        ):
+            total += 1
+            try:
+                path = _extract_path(row.get(path_col), cfg.data_dir)
+                if path is None or not Path(path).exists():
+                    skipped += 1
+                    continue
+                label = _normalize_label(row.get(label_col))
+            except Exception:
+                skipped += 1
                 continue
-
-            label = determine_cls_from_filepath(p)
-            yield {
-                "path": str(p.resolve()),
+            split = None
+            if split_col and row.get(split_col) is not None:
+                split = _normalize_split(row.get(split_col))
+            if not split:
+                split = _normalize_split(split_name)
+            language = None
+            if language_col and row.get(language_col) is not None:
+                language = str(row.get(language_col)).strip().lower()
+            if language is None:
+                language = _infer_language_from_path(path)
+            tts_system = None
+            if system_col and row.get(system_col) is not None:
+                tts_system = str(row.get(system_col))
+            speaker = None
+            if speaker_col and row.get(speaker_col) is not None:
+                speaker = str(row.get(speaker_col))
+            group_id = _group_id(label, speaker, tts_system)
+            out = {
+                "path": path,
                 "label": str(label),
-                "split": split_name,
-                "source": source_name,
-                "group_id": group_id_from_name(p),
+                "split": split,
+                "source": cfg.name,
             }
+            if group_id:
+                out["group_id"] = group_id
+            if tts_system:
+                out["tts_system"] = tts_system
+            if language:
+                out["language"] = language
+            if speaker:
+                out["speaker_id"] = speaker
+            rows.append(out)
+    if skipped:
+        print(f"[warn] {cfg.name}: skipped {skipped}/{total} rows (missing/invalid).")
+    return rows
 
-    def _rows_from_dirs(
-        self,
-        root: Path,
-        *,
-        source_name: str,
-        split_name: str,
-        group_id_from_name: Callable[[Path], str],
-    ) -> Iterable[dict]:
-        for cls_dir, label in [("real", 0), ("fake", 1)]:
-            base = root / cls_dir
-            if not base.exists():
-                continue
-            for p in tqdm(
-                (q for q in base.rglob("*") if q.suffix.lower() in AUDIO_EXTS),
-                desc=f"{source_name}:{split_name}:{root.name}/{cls_dir}",
-            ):
-                yield {
-                    "path": str(p.resolve()),
-                    "label": str(label),
-                    "split": split_name,
-                    "source": source_name,
-                    "group_id": group_id_from_name(p),
+
+def _maybe_write_audio(
+    *,
+    audio: dict,
+    split: str,
+    output_dir: Path,
+    name_hint: Optional[str] = None,
+) -> Optional[str]:
+    try:
+        import numpy as np
+        import soundfile as sf
+        import torch
+    except Exception as exc:
+        raise RuntimeError(
+            "DFADD audio materialization requires numpy, soundfile, and torch."
+        ) from exc
+
+    audio_path = None
+    audio_bytes = None
+    audio_array = None
+    audio_sr = None
+    audio_decoder = None
+
+    if isinstance(audio, dict):
+        audio_bytes = audio.get("bytes")
+        audio_array = audio.get("array")
+        audio_sr = audio.get("sampling_rate")
+        audio_path = audio.get("path")
+    elif hasattr(audio, "get_all_samples"):
+        audio_decoder = audio
+
+    audio_path = audio_path or name_hint
+    if not audio_path:
+        return None
+
+    rel_path = Path(str(audio_path)).name
+    out_path = output_dir / split / rel_path
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    if not out_path.exists():
+        if audio_bytes:
+            out_path.write_bytes(audio_bytes)
+        elif audio_array is not None and audio_sr:
+            data = np.asarray(audio_array, dtype=np.float32)
+            sf.write(out_path, data, int(audio_sr))
+        elif audio_decoder is not None:
+            samples = audio_decoder.get_all_samples()
+            data = samples.data
+            if isinstance(data, torch.Tensor):
+                data = data.cpu().numpy()
+            data = np.asarray(data, dtype=np.float32)
+            if data.ndim == 2:
+                data = data.T
+            sf.write(out_path, data, int(samples.sample_rate))
+        else:
+            return None
+    return str(out_path.resolve())
+
+
+def _candidate_dfadd_path(
+    *, path_value: Optional[str], split: str, audio_root: Path
+) -> Optional[str]:
+    if not path_value:
+        return None
+    base = Path(str(path_value)).name
+    candidate = audio_root / split / base
+    if candidate.exists():
+        return str(candidate.resolve())
+    candidate = audio_root / base
+    if candidate.exists():
+        return str(candidate.resolve())
+    return None
+
+
+def _apply_language_split(rows: list[dict]) -> None:
+    for row in rows:
+        lang = (row.get("language") or "").lower()
+        if lang in EN_TOKENS:
+            row["split"] = "train"
+        elif lang in DE_TOKENS:
+            row["split"] = "test"
+
+
+def _ensure_val_split(rows: list[dict], val_ratio: float, seed: int) -> None:
+    if val_ratio <= 0:
+        return
+    if any(r.get("split") == "val" for r in rows):
+        return
+    train_rows = [r for r in rows if r.get("split") == "train"]
+    if not train_rows:
+        return
+    grouped: dict[str, list[dict]] = {}
+    for row in train_rows:
+        group_id = row.get("group_id") or row.get("path")
+        grouped.setdefault(group_id, []).append(row)
+    groups = sorted(grouped.keys())
+    rng = random.Random(seed)
+    rng.shuffle(groups)
+    n_val = int(round(len(groups) * val_ratio))
+    val_groups = set(groups[:n_val])
+    for row in train_rows:
+        if (row.get("group_id") or row.get("path")) in val_groups:
+            row["split"] = "val"
+
+
+def _rows_from_mlaad_dir(data_dir: Path) -> list[dict]:
+    rows: list[dict] = []
+    original_dir = data_dir / "original"
+    fake_dir = data_dir / "fake"
+    if not original_dir.exists() or not fake_dir.exists():
+        raise FileNotFoundError(
+            f"Expected MLAAD-tiny structure with original/ and fake/ under {data_dir}"
+        )
+
+    for lang_dir in sorted(original_dir.iterdir()):
+        if not lang_dir.is_dir():
+            continue
+        language = lang_dir.name.lower()
+        wav_files = sorted(lang_dir.rglob("*.wav"))
+        for wav_path in tqdm(
+            wav_files,
+            total=len(wav_files),
+            desc=f"MLAAD-tiny:original:{language}",
+        ):
+            rows.append(
+                {
+                    "path": str(wav_path.resolve()),
+                    "label": "0",
+                    "split": "train",
+                    "source": "MLAAD-tiny",
+                    "language": language,
                 }
-
-    def _rows_from_pattern(
-        self,
-        pattern: str,
-        *,
-        source_name: str,
-        split_name: str,
-        group_id_from_name: Callable[[Path], str],
-        determine_cls_from_filepath: Callable[[Path], int],
-    ) -> Iterable[dict]:
-        matches = self._expand_pattern(pattern)
-        if not matches:
-            raise FileNotFoundError(f"Pattern matched nothing: {pattern}")
-
-        if self._matches_are_audio(matches):
-            yield from self._rows_from_wav_files(
-                matches,
-                source_name=source_name,
-                split_name=split_name,
-                group_id_from_name=group_id_from_name,
-                determine_cls_from_filepath=determine_cls_from_filepath,
             )
-            return
 
-        for root in matches:
-            if not root.exists() or root.is_file():
+    for lang_dir in sorted(fake_dir.iterdir()):
+        if not lang_dir.is_dir():
+            continue
+        language = lang_dir.name.lower()
+        for system_dir in sorted(lang_dir.iterdir()):
+            if not system_dir.is_dir():
                 continue
-            yield from self._rows_from_dirs(
-                root,
-                source_name=source_name,
-                split_name=split_name,
-                group_id_from_name=group_id_from_name,
-            )
-
-    def add_rows_from_patterns(
-        self,
-        source_name: str,
-        training_pattern: str,
-        testing_pattern: str,
-        validation_pattern: str,
-        group_id_from_name: Callable[[Path], str],
-        determine_cls_from_filepath: Callable[[Path], int],
-    ) -> None:
-        for split_name, pat in [
-            ("train", training_pattern),
-            ("val", validation_pattern),
-            ("test", testing_pattern),
-        ]:
-            for row in self._rows_from_pattern(
-                pat,
-                source_name=source_name,
-                split_name=split_name,
-                group_id_from_name=group_id_from_name,
-                determine_cls_from_filepath=determine_cls_from_filepath,
+            tts_system = system_dir.name
+            wav_files = sorted(system_dir.rglob("*.wav"))
+            for wav_path in tqdm(
+                wav_files,
+                total=len(wav_files),
+                desc=f"MLAAD-tiny:fake:{language}:{tts_system}",
             ):
-                self._rows.append(row)
+                rows.append(
+                    {
+                        "path": str(wav_path.resolve()),
+                        "label": "1",
+                        "split": "train",
+                        "source": "MLAAD-tiny",
+                        "tts_system": tts_system,
+                        "group_id": f"tts:{tts_system}",
+                        "language": language,
+                    }
+                )
+    if not rows:
+        raise RuntimeError(f"No MLAAD-tiny audio files found under {data_dir}")
+    return rows
 
-    def _dedupe_rows(self, rows: list[dict]) -> list[dict]:
-        seen = set()
-        deduped = []
-        for r in rows:
-            if r["path"] in seen:
+
+def _load_in_the_wild_meta(in_the_wild_dir: Path, in_the_wild_zip: Path) -> list[dict]:
+    meta_path = in_the_wild_dir / IN_THE_WILD_SUBDIR / IN_THE_WILD_META
+    if meta_path.exists():
+        rows = []
+        with meta_path.open("r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+        return rows
+    if in_the_wild_zip.exists():
+        with zipfile.ZipFile(in_the_wild_zip) as zf:
+            with zf.open(f"{IN_THE_WILD_SUBDIR}/{IN_THE_WILD_META}") as f:
+                reader = csv.DictReader(line.decode("utf-8") for line in f)
+                return list(reader)
+    raise FileNotFoundError(
+        f"Missing In-the-Wild metadata at {meta_path} or {in_the_wild_zip}"
+    )
+
+
+def _rows_from_in_the_wild(
+    in_the_wild_dir: Path, in_the_wild_zip: Path, split: str
+) -> list[dict]:
+    meta_rows = _load_in_the_wild_meta(in_the_wild_dir, in_the_wild_zip)
+    audio_root = in_the_wild_dir / IN_THE_WILD_SUBDIR
+    if not audio_root.exists():
+        raise FileNotFoundError(
+            f"In-the-Wild audio directory not found: {audio_root}. "
+            "Unzip release_in_the_wild.zip first."
+        )
+
+    rows: list[dict] = []
+    missing = 0
+    for row in meta_rows:
+        rel = row.get("file")
+        if not rel:
+            continue
+        path = audio_root / rel
+        if not (path.exists() and path.suffix.lower() in IN_THE_WILD_AUDIO_EXTS):
+            missing += 1
+            continue
+        label = _normalize_label(row.get("label"))
+        out = {
+            "path": str(path.resolve()),
+            "label": str(label),
+            "split": split,
+            "source": "In-the-Wild",
+        }
+        speaker = row.get("speaker")
+        if speaker:
+            out["speaker_id"] = speaker
+        rows.append(out)
+    if missing:
+        print(f"[warn] In-the-Wild: skipped {missing} missing audio files.")
+    return rows
+
+
+def _write_manifest(rows: list[dict], manifest_path: Path) -> Path:
+    out_path = Path(manifest_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    base_fields = ["path", "label", "split", "source", "group_id"]
+    extra_fields = sorted({k for r in rows for k in r if k not in base_fields})
+    with out_path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=base_fields + extra_fields)
+        writer.writeheader()
+        writer.writerows(rows)
+    return out_path
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Build manifest.csv from DFADD + MLAAD-tiny (parquet), "
+            "plus ML-DF and In-the-Wild datasets."
+        )
+    )
+    parser.add_argument(
+        "--manifest",
+        type=Path,
+        default=ROOT / "manifest.csv",
+        help="Output manifest CSV path.",
+    )
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = _parse_args()
+
+    dfadd_rows: list[dict] = []
+    mlaad_rows: list[dict] = []
+    ml_df_rows: list[dict] = []
+
+    if not DFADD_DIR.exists():
+        raise FileNotFoundError(f"Missing DFADD dir: {DFADD_DIR}")
+
+    dfadd_cfg = DatasetConfig(
+        name="DFADD",
+        data_dir=DFADD_DIR,
+        label_candidates=("label", "is_spoof", "spoof", "class", "target", "type"),
+        path_candidates=(
+            "path",
+            "audio_path",
+            "file",
+            "file_path",
+            "wav_path",
+            "audio",
+        ),
+        split_candidates=("split", "subset", "set"),
+        speaker_candidates=("speaker_id", "speaker", "spk_id", "spk"),
+        system_candidates=(
+            "tts_system",
+            "system_id",
+            "system",
+            "tts",
+            "tts_id",
+            "model_id",
+            "vocoder",
+        ),
+        language_candidates=("language", "lang", "locale"),
+    )
+
+    dfadd_ds = _load_parquet_dir(dfadd_cfg.data_dir)
+    for split_name, ds in dfadd_ds.items():
+        columns = list(getattr(ds, "column_names", []))
+        label_col = _first_present(columns, dfadd_cfg.label_candidates)
+        path_col = _first_present(columns, dfadd_cfg.path_candidates)
+        audio_col = "audio" if "audio" in columns else None
+        if not label_col or not (path_col or audio_col):
+            raise ValueError(
+                f"{dfadd_cfg.name}: missing label/path column (label={label_col}, path={path_col}). "
+                f"Columns: {columns}"
+            )
+        for row in tqdm(
+            ds,
+            total=len(ds),
+            desc=f"DFADD:{split_name}",
+        ):
+            try:
+                label = _normalize_label(row.get(label_col))
+            except Exception:
                 continue
-            seen.add(r["path"])
-            deduped.append(r)
-        return deduped
-
-    def _enforce_group_disjoint(self, rows: list[dict]) -> list[dict]:
-        by_split = {"train": [], "val": [], "test": []}
-        for r in rows:
-            s = r["split"]
-            if s in by_split:
-                by_split[s].append(r)
-
-        def gids(rs):
-            return set(r["group_id"] for r in rs)
-
-        test_g = gids(by_split["test"])
-
-        before = len(by_split["val"])
-        by_split["val"] = [r for r in by_split["val"] if r["group_id"] not in test_g]
-        dropped_val = before - len(by_split["val"])
-
-        val_g = gids(by_split["val"])
-
-        before = len(by_split["train"])
-        by_split["train"] = [
-            r
-            for r in by_split["train"]
-            if (r["group_id"] not in test_g) and (r["group_id"] not in val_g)
-        ]
-        dropped_train = before - len(by_split["train"])
-
-        if dropped_val or dropped_train:
-            print(
-                f"[group_disjoint] dropped from val: {dropped_val}, from train: {dropped_train}"
+            split = _normalize_split(row.get("split") or split_name)
+            path = None
+            if path_col:
+                path = _extract_path(
+                    row.get(path_col),
+                    _resolve_parquet_root(dfadd_cfg.data_dir),
+                )
+            if not path or not Path(path).exists():
+                path = _candidate_dfadd_path(
+                    path_value=path,
+                    split=split,
+                    audio_root=DFADD_AUDIO_DIR,
+                )
+            if (not path or not Path(path).exists()) and audio_col:
+                name_hint = row.get("audio_name") or (
+                    row.get(path_col) if path_col else None
+                )
+                path = _maybe_write_audio(
+                    audio=row.get(audio_col),
+                    split=split,
+                    output_dir=DFADD_AUDIO_DIR,
+                    name_hint=name_hint,
+                )
+            if not path or not Path(path).exists():
+                continue
+            dfadd_rows.append(
+                {
+                    "path": str(Path(path).resolve()),
+                    "label": str(label),
+                    "split": split,
+                    "source": dfadd_cfg.name,
+                }
             )
+    if not dfadd_rows:
+        print("[warn] DFADD: no rows were resolved; check parquet/audio files.")
 
-        return by_split["train"] + by_split["val"] + by_split["test"]
+    if not MLAAD_DIR.exists():
+        raise FileNotFoundError(f"Missing MLAAD-tiny dir: {MLAAD_DIR}")
 
-    def _cap_rows(self, rows: list[dict], max_per_split: Optional[int]) -> list[dict]:
-        if not max_per_split or max_per_split <= 0:
-            return rows
-        by_split = {"train": [], "val": [], "test": []}
-        for r in rows:
-            s = r["split"]
-            if s in by_split:
-                if len(by_split[s]) < max_per_split:
-                    by_split[s].append(r)
-        return by_split["train"] + by_split["val"] + by_split["test"]
+    mlaad_cfg = DatasetConfig(
+        name="MLAAD-tiny",
+        data_dir=MLAAD_DIR,
+        label_candidates=("label", "is_spoof", "spoof", "class", "target", "type"),
+        path_candidates=(
+            "path",
+            "audio_path",
+            "file",
+            "file_path",
+            "wav_path",
+            "audio",
+        ),
+        split_candidates=("split", "subset", "set"),
+        speaker_candidates=("speaker_id", "speaker", "spk_id", "spk"),
+        system_candidates=(
+            "tts_system",
+            "system_id",
+            "system",
+            "tts",
+            "tts_id",
+            "model_id",
+            "vocoder",
+        ),
+        language_candidates=("language", "lang", "locale"),
+        force_language_split=True,
+    )
 
-    def write(
-        self, manifest_path: Path, *, max_per_split: Optional[int] = None
-    ) -> Path:
-        out_path = Path(manifest_path)
-        out_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        mlaad_rows = _rows_from_dataset(
+            _load_parquet_dir(mlaad_cfg.data_dir), mlaad_cfg
+        )
+    except FileNotFoundError:
+        mlaad_rows = _rows_from_mlaad_dir(mlaad_cfg.data_dir)
 
-        all_rows = self._dedupe_rows(self._rows)
-        all_rows = self._enforce_group_disjoint(all_rows)
-        all_rows = self._cap_rows(all_rows, max_per_split)
+    if mlaad_rows and mlaad_cfg.force_language_split:
+        only_train = all(r.get("split") == "train" for r in mlaad_rows)
+        if only_train or not any(r.get("split") == "test" for r in mlaad_rows):
+            _apply_language_split(mlaad_rows)
 
-        with open(out_path, "w", newline="", encoding="utf-8") as f:
-            w = csv.DictWriter(
-                f, fieldnames=["path", "label", "split", "source", "group_id"]
-            )
-            w.writeheader()
-            w.writerows(all_rows)
+    if not ML_DF_DIR.exists():
+        raise FileNotFoundError(f"Missing ML-DF directory: {ML_DF_DIR}")
+    ml_df_rows = _rows_from_ml_df(ML_DF_DIR)
+    ml_df_rows = _dedupe_rows(ml_df_rows)
 
-        return out_path
+    _ensure_val_split(dfadd_rows, val_ratio=VAL_RATIO, seed=SPLIT_SEED)
+    if mlaad_rows:
+        _ensure_val_split(mlaad_rows, val_ratio=VAL_RATIO, seed=SPLIT_SEED)
+
+    in_the_wild_rows = _rows_from_in_the_wild(
+        IN_THE_WILD_DIR, IN_THE_WILD_ZIP, split="val"
+    )
+
+    if not (dfadd_rows or mlaad_rows or ml_df_rows or in_the_wild_rows):
+        raise RuntimeError("No rows to write; check dataset paths or flags.")
+
+    all_rows = dfadd_rows + mlaad_rows + ml_df_rows + in_the_wild_rows
+    _write_manifest(all_rows, args.manifest)
+    print(f"Wrote manifest with {len(all_rows)} rows to {args.manifest}")
 
 
 if __name__ == "__main__":
-    if any((not os.path.exists(missing := p)) for p in [ROOT, RAW_DATA_DIR, FoR_DIR]):
-        raise FileNotFoundError(
-            f"Missing file or directory: {missing}. Please refer to {ROOT / 'README.md'} for details"
-        )
-    manifest_fp = ROOT / "manifest.csv"
-
-    builder = ManifestBuilder()
-
-    builder.add_rows_from_patterns(
-        "FoR-norm",
-        training_pattern="./data/raw/for-norm/training/**/*.wav",
-        testing_pattern="./data/raw/for-norm/testing/**/*.wav",
-        validation_pattern="./data/raw/for-norm/validation/**/*.wav",
-        group_id_from_name=builder.group_id_from_filename_for,
-        determine_cls_from_filepath=builder.determine_cls_from_filepath_for,
-    )
-
-    if CODECFAKE_PLUS_CORS_DIR.exists() and CODECFAKE_PLUS_CORS_LABELS.exists():
-        builder.add_rows_from_codecfake_labels(
-            CODECFAKE_PLUS_CORS_DIR,
-            CODECFAKE_PLUS_CORS_LABELS,
-            split_ratio=CODECFAKE_SPLIT_RATIO,
-            source_name="CodecFakePlus-CoRS",
-            group_id_from_name=builder._group_id_from_codecfake_cors_name,
-        )
-
-    else:
-        print("Missing")
-    if CODECFAKE_PLUS_COSG_DIR.exists() and CODECFAKE_PLUS_COSG_LABELS.exists():
-        builder.add_rows_from_codecfake_labels(
-            CODECFAKE_PLUS_COSG_DIR,
-            CODECFAKE_PLUS_COSG_LABELS,
-            split_ratio=CODECFAKE_SPLIT_RATIO,
-            source_name="CodecFakePlus-CoSG",
-            group_id_from_name=builder._group_id_from_codecfake_cosg_name,
-        )
-
-    builder.write(manifest_fp)
-    print("Manifest has been built at:", manifest_fp)
+    main()

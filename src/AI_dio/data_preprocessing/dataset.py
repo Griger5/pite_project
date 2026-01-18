@@ -8,6 +8,7 @@ import torch
 from torch.utils.data import Dataset
 
 from AI_dio.data_preprocessing.audio_utils import load_audio_mono_resampled
+from AI_dio.data_preprocessing.augmentations import AudioAugmenter
 from AI_dio.data_preprocessing.features import (
     FeatureParams,
     build_mel_transforms,
@@ -26,6 +27,10 @@ class AIDetectDataset(Dataset):
         hop_ms=10.0,
         n_mels=80,
         cache_dir: Optional[str] = None,
+        augment: bool = False,
+        augment_root: Optional[str] = None,
+        augment_cfg: Optional[dict] = None,
+        rows: Optional[list[dict]] = None,
     ):
         self._target_sr = target_sr
         self._chunk_length = int(chunk_duration * target_sr)
@@ -35,6 +40,8 @@ class AIDetectDataset(Dataset):
         self._features_shape = None
         self._features_dtype = None
         self._labels = None
+        self._augmenter: Optional[AudioAugmenter] = None
+        self._feature_augment = None
 
         if not self._use_cache:
             self._params = FeatureParams(
@@ -46,9 +53,55 @@ class AIDetectDataset(Dataset):
             )
             self._mel, self._to_db = build_mel_transforms(self._params)
 
-        with open(manifest_csv) as f:
-            reader = csv.DictReader(f.readlines(), delimiter=",")
-            self.rows = list(filter(lambda r: r["split"] == split, reader))
+        if augment and not self._use_cache:
+            if augment_root is None:
+                raise ValueError("augment_root is required when augment=True")
+            cfg = augment_cfg or {}
+            self._augmenter = AudioAugmenter(
+                augment_root=Path(augment_root),
+                target_sr=target_sr,
+                chunk_length=self._chunk_length,
+                p_noise=float(cfg.get("p_noise", 0.6)),
+                p_music=float(cfg.get("p_music", 0.3)),
+                p_rir=float(cfg.get("p_rir", 0.3)),
+                snr_db_min=float(cfg.get("snr_db_min", -5.0)),
+                snr_db_max=float(cfg.get("snr_db_max", 15.0)),
+                music_snr_db_min=float(cfg.get("music_snr_db_min", -10.0)),
+                music_snr_db_max=float(cfg.get("music_snr_db_max", 10.0)),
+                gain_db_min=float(cfg.get("gain_db_min", -6.0)),
+                gain_db_max=float(cfg.get("gain_db_max", 6.0)),
+                allow_music_and_noise=bool(cfg.get("allow_music_and_noise", False)),
+                preload=bool(cfg.get("preload", False)),
+                preload_max_files=int(cfg.get("preload_max_files", 256)),
+                preload_segments_per_file=int(cfg.get("preload_segments_per_file", 1)),
+            )
+        elif augment and self._use_cache:
+            feature_cfg = (augment_cfg or {}).get("feature_mask") or (
+                augment_cfg or {}
+            ).get("specaugment")
+            if feature_cfg and feature_cfg.get("enabled", True):
+                self._feature_augment = _FeatureAugment(
+                    time_masks=int(feature_cfg.get("time_masks", 2)),
+                    time_width=int(feature_cfg.get("time_width", 12)),
+                    freq_masks=int(feature_cfg.get("freq_masks", 2)),
+                    freq_width=int(feature_cfg.get("freq_width", 8)),
+                    p=float(feature_cfg.get("p", 1.0)),
+                    noise_std=float(feature_cfg.get("noise_std", 0.0)),
+                )
+            else:
+                print(
+                    "[warn] augment enabled with cache; "
+                    "no feature_mask/specaugment config found, disabling augment."
+                )
+
+        if rows is not None:
+            if cache_dir is not None:
+                raise ValueError("cache_dir must be None when passing explicit rows.")
+            self.rows = rows
+        else:
+            with open(manifest_csv) as f:
+                reader = csv.DictReader(f.readlines(), delimiter=",")
+                self.rows = list(filter(lambda r: r["split"] == split, reader))
 
         if self._use_cache:
             self._init_cache(
@@ -155,12 +208,16 @@ class AIDetectDataset(Dataset):
                 y = int(self._labels[index])
             else:
                 y = int(self.rows[index]["label"])
+            if self._feature_augment is not None:
+                tokens = self._feature_augment(tokens)
             return tokens, y
 
         r = self.rows[index]
         path = r["path"]
         y = int(r["label"])
         audio_tensor = self._load_from_filepath(path)
+        if self._augmenter is not None:
+            audio_tensor = self._augmenter.apply(audio_tensor)
         tokens = mel_tokens_from_audio(
             audio_tensor, self._params, mel=self._mel, to_db=self._to_db
         )
@@ -173,7 +230,43 @@ class AIDetectDataset(Dataset):
         return len(self.rows)
 
 
-if __name__ == "__main__":
-    ds = AIDetectDataset(manifest_csv="manifest.csv", split="train")
-    tokens, y = ds[0]
-    print(tokens.size(), y)
+class _FeatureAugment:
+    def __init__(
+        self,
+        *,
+        time_masks: int,
+        time_width: int,
+        freq_masks: int,
+        freq_width: int,
+        p: float,
+        noise_std: float,
+    ) -> None:
+        self._time_masks = max(int(time_masks), 0)
+        self._time_width = max(int(time_width), 0)
+        self._freq_masks = max(int(freq_masks), 0)
+        self._freq_width = max(int(freq_width), 0)
+        self._p = float(p)
+        self._noise_std = float(noise_std)
+
+    def __call__(self, tokens: torch.Tensor) -> torch.Tensor:
+        if self._p <= 0.0 or torch.rand(1).item() > self._p:
+            return tokens
+        tokens = tokens.clone()
+        time_steps, freq_bins = tokens.shape
+        if self._time_width > 0 and self._time_masks > 0 and time_steps > 1:
+            for _ in range(self._time_masks):
+                width = int(torch.randint(0, self._time_width + 1, (1,)).item())
+                if width <= 0 or width >= time_steps:
+                    continue
+                start = int(torch.randint(0, time_steps - width + 1, (1,)).item())
+                tokens[start : start + width, :] = 0.0
+        if self._freq_width > 0 and self._freq_masks > 0 and freq_bins > 1:
+            for _ in range(self._freq_masks):
+                width = int(torch.randint(0, self._freq_width + 1, (1,)).item())
+                if width <= 0 or width >= freq_bins:
+                    continue
+                start = int(torch.randint(0, freq_bins - width + 1, (1,)).item())
+                tokens[:, start : start + width] = 0.0
+        if self._noise_std > 0.0:
+            tokens = tokens + torch.randn_like(tokens) * self._noise_std
+        return tokens

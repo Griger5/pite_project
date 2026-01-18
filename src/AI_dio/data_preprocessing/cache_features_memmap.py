@@ -9,6 +9,7 @@ from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
 from AI_dio.data_preprocessing.audio_utils import load_audio_mono_resampled
+from AI_dio.data_preprocessing.augmentations import AudioAugmenter
 from AI_dio.data_preprocessing.features import (
     FeatureParams,
     build_mel_transforms,
@@ -32,10 +33,43 @@ def _load_manifest(manifest_csv: Path) -> dict[str, list[dict]]:
 
 
 class _AudioDataset(Dataset):
-    def __init__(self, rows: list[dict], target_sr: int, chunk_length: int) -> None:
+    def __init__(
+        self,
+        rows: list[dict],
+        target_sr: int,
+        chunk_length: int,
+        *,
+        augment: bool = False,
+        augment_root: Path | None = None,
+        augment_cfg: dict | None = None,
+    ) -> None:
         self._rows = rows
         self._target_sr = target_sr
         self._chunk_length = chunk_length
+        self._augmenter: AudioAugmenter | None = None
+
+        if augment:
+            if augment_root is None:
+                raise ValueError("augment_root is required when augment=True")
+            cfg = augment_cfg or {}
+            self._augmenter = AudioAugmenter(
+                augment_root=augment_root,
+                target_sr=target_sr,
+                chunk_length=chunk_length,
+                p_noise=float(cfg.get("p_noise", 0.6)),
+                p_music=float(cfg.get("p_music", 0.3)),
+                p_rir=float(cfg.get("p_rir", 0.3)),
+                snr_db_min=float(cfg.get("snr_db_min", -5.0)),
+                snr_db_max=float(cfg.get("snr_db_max", 15.0)),
+                music_snr_db_min=float(cfg.get("music_snr_db_min", -10.0)),
+                music_snr_db_max=float(cfg.get("music_snr_db_max", 10.0)),
+                gain_db_min=float(cfg.get("gain_db_min", -6.0)),
+                gain_db_max=float(cfg.get("gain_db_max", 6.0)),
+                allow_music_and_noise=bool(cfg.get("allow_music_and_noise", False)),
+                preload=bool(cfg.get("preload", False)),
+                preload_max_files=int(cfg.get("preload_max_files", 256)),
+                preload_segments_per_file=int(cfg.get("preload_segments_per_file", 1)),
+            )
 
     def __len__(self) -> int:
         return len(self._rows)
@@ -52,6 +86,8 @@ class _AudioDataset(Dataset):
         except Exception:
             ok = False
             audio_tensor = torch.zeros((1, self._chunk_length), dtype=torch.float32)
+        if ok and self._augmenter is not None:
+            audio_tensor = self._augmenter.apply(audio_tensor)
         return idx, audio_tensor, int(row["label"]), ok
 
 
@@ -72,6 +108,9 @@ def _write_split_cache(
     pin_memory: bool,
     prefetch_factor: int | None,
     params: FeatureParams,
+    augment: bool,
+    augment_root: Path | None,
+    augment_cfg: dict | None,
 ) -> dict:
     num_samples = len(rows)
     features_path = output_dir / f"features_{split}.mmap"
@@ -86,7 +125,12 @@ def _write_split_cache(
     labels = np.empty((num_samples,), dtype=np.int64)
 
     dataset = _AudioDataset(
-        rows=rows, target_sr=params.target_sr, chunk_length=chunk_length
+        rows=rows,
+        target_sr=params.target_sr,
+        chunk_length=chunk_length,
+        augment=augment,
+        augment_root=augment_root,
+        augment_cfg=augment_cfg,
     )
     loader_kwargs: dict = {
         "batch_size": batch_size,
@@ -169,6 +213,10 @@ def build_cache(
     num_workers: int,
     pin_memory: bool,
     prefetch_factor: int | None,
+    augment: bool,
+    augment_root: Path | None,
+    augment_cfg: dict | None,
+    augment_splits: set[str],
 ) -> Path:
     splits = _load_manifest(manifest_csv)
 
@@ -218,13 +266,15 @@ def build_cache(
             num_frames=frames_per_clip,
             n_mels=params.n_mels,
             dtype=dtype,
-            target_sr=params.target_sr,
             device=device,
             batch_size=batch_size,
             num_workers=num_workers,
             pin_memory=pin_memory,
             prefetch_factor=prefetch_factor,
             params=params,
+            augment=augment and split in augment_splits,
+            augment_root=augment_root,
+            augment_cfg=augment_cfg,
         )
         metadata["splits"][split] = split_meta
 
@@ -238,37 +288,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Cache log-mel features into per-split memmap files."
     )
-    parser.add_argument(
-        "--manifest",
-        type=Path,
-        default=ROOT / "manifest.csv",
-        help="Path to manifest CSV.",
-    )
-    parser.add_argument(
-        "--output-dir",
-        type=Path,
-        default=ROOT / "data" / "cache" / "mel_3s_16k",
-        help="Output directory for memmap files.",
-    )
-    parser.add_argument("--chunk-duration", type=float, default=3.0)
-    parser.add_argument("--target-sr", type=int, default=16000)
-    parser.add_argument("--win-ms", type=float, default=25.0)
-    parser.add_argument("--hop-ms", type=float, default=10.0)
-    parser.add_argument("--n-mels", type=int, default=80)
-    parser.add_argument("--dtype", type=str, default="float32")
-    parser.add_argument(
-        "--device",
-        type=str,
-        default="cpu",
-        help="Device for mel computation (e.g., cpu, cuda, cuda:0).",
-    )
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--pin-memory", action="store_true")
     parser.add_argument("--prefetch-factor", type=int, default=2)
 
     args = parser.parse_args()
-    dtype = np.dtype(args.dtype)
+    dtype = np.dtype("float32")
     if dtype.kind != "f":
         raise ValueError(f"Expected a float dtype, got {dtype}")
     if args.batch_size < 1:
@@ -276,25 +302,32 @@ if __name__ == "__main__":
     if args.num_workers < 0:
         raise ValueError("num_workers must be >= 0")
 
-    device = torch.device(args.device)
-    if device.type == "cuda" and not torch.cuda.is_available():
-        raise RuntimeError("CUDA requested but not available.")
+    device = torch.device("cpu")
     pin_memory = args.pin_memory and device.type == "cuda"
     prefetch_factor = args.prefetch_factor if args.num_workers > 0 else None
 
+    augment_cfg = None
+    augment_enabled = False
+    augment_root = None
+    augment_splits = {"train"}
+
     metadata_path = build_cache(
-        manifest_csv=args.manifest,
-        output_dir=args.output_dir,
-        chunk_duration=args.chunk_duration,
-        target_sr=args.target_sr,
-        win_ms=args.win_ms,
-        hop_ms=args.hop_ms,
-        n_mels=args.n_mels,
+        manifest_csv=ROOT / "manifest.csv",
+        output_dir=ROOT / "data" / "cache" / "mel_3s_16k",
+        chunk_duration=3.0,
+        target_sr=16000,
+        win_ms=25.0,
+        hop_ms=10.0,
+        n_mels=80,
         dtype=dtype,
         device=device,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
         pin_memory=pin_memory,
         prefetch_factor=prefetch_factor,
+        augment=augment_enabled,
+        augment_root=augment_root,
+        augment_cfg=augment_cfg,
+        augment_splits=augment_splits,
     )
     print(f"Wrote cache metadata to {metadata_path}")

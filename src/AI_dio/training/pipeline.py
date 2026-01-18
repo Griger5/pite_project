@@ -18,6 +18,11 @@ from AI_dio.training.common import (
     resolve_optional_path,
     resolve_path,
 )
+from AI_dio.training.metrics import (
+    BinaryMetricsAccumulator,
+    _best_threshold_max_acc,
+    _binary_metrics_from_scores,
+)
 from AI_dio.training.models import BaselineCNN
 
 ROOT = Path(__file__).parents[3].resolve()
@@ -49,11 +54,18 @@ def build_loader(
     prefetch_factor: int,
     drop_last: bool,
     balanced_sampler: bool,
+    augment_cfg: Optional[dict],
+    augment_root: Optional[Path],
 ) -> DataLoader:
+    augment_enabled = bool(augment_cfg and augment_cfg.get("enabled", False))
+    use_augment = augment_enabled and split == "train" and cache_dir is None
     dataset = AIDetectDataset(
         str(manifest),
         split,
         cache_dir=(None if cache_dir is None else str(cache_dir)),
+        augment=use_augment,
+        augment_root=None if augment_root is None else str(augment_root),
+        augment_cfg=augment_cfg,
     )
     sampler = None
     shuffle = split == "train"
@@ -106,6 +118,31 @@ def build_loader(
         drop_last=drop_last if split == "train" else False,
         collate_fn=collate_fn,
     )
+
+
+def _compute_class_weights(dataset, *, mode: str) -> Optional[torch.Tensor]:
+    if not hasattr(dataset, "rows"):
+        return None
+    counts = {0: 0, 1: 0}
+    for row in dataset.rows:
+        try:
+            label = int(row.get("label", -1))
+        except (TypeError, ValueError):
+            continue
+        if label in counts:
+            counts[label] += 1
+    total = counts[0] + counts[1]
+    if total == 0 or counts[0] == 0 or counts[1] == 0:
+        return None
+    if mode == "balanced":
+        w0 = total / (2.0 * counts[0])
+        w1 = total / (2.0 * counts[1])
+    elif mode == "inverse":
+        w0 = 1.0 / counts[0]
+        w1 = 1.0 / counts[1]
+    else:
+        return None
+    return torch.tensor([w0, w1], dtype=torch.float32)
 
 
 def train_one_epoch(
@@ -161,11 +198,16 @@ def evaluate(
     device: torch.device,
     epoch: int,
     epochs: int,
-) -> tuple[float, float]:
+    threshold_cfg: Optional[object] = None,
+) -> dict:
     model.eval()
     running_loss = 0.0
     correct = 0
     total = 0
+    metrics_acc = BinaryMetricsAccumulator(track_pr_auc=True)
+    use_threshold = threshold_cfg is not None
+    scores_list = []
+    labels_list = []
 
     for x, y in tqdm(loader, desc=f"Epoch {epoch}/{epochs} [val]"):
         x = x.to(device, non_blocking=True)
@@ -180,10 +222,29 @@ def evaluate(
         preds = logits.argmax(dim=1)
         correct += (preds == y).sum().item()
         total += batch_size
+        metrics_acc.update(logits, y)
+        if use_threshold:
+            probs = torch.softmax(logits, dim=1)[:, 1].detach().cpu()
+            scores_list.append(probs)
+            labels_list.append(y.detach().cpu())
 
     avg_loss = running_loss / max(total, 1)
     acc = correct / max(total, 1)
-    return avg_loss, acc
+    metrics = {"loss": avg_loss, "acc": acc}
+    metrics.update(metrics_acc.compute())
+    if use_threshold and scores_list:
+        scores = torch.cat(scores_list).numpy().astype(float)
+        labels = torch.cat(labels_list).numpy().astype(int)
+        threshold = None
+        if isinstance(threshold_cfg, str) and threshold_cfg.lower() == "auto":
+            threshold, _ = _best_threshold_max_acc(labels, scores)
+        else:
+            threshold = float(threshold_cfg)
+        threshold_metrics = _binary_metrics_from_scores(labels, scores, threshold)
+        if threshold_metrics:
+            metrics.update(threshold_metrics)
+            metrics["threshold"] = float(threshold)
+    return metrics
 
 
 def run_training(config: dict, config_path: Path) -> None:
@@ -210,10 +271,20 @@ def run_training(config: dict, config_path: Path) -> None:
         torch.set_float32_matmul_precision("high")
 
     use_cache = data_cfg.get("use_cache", True)
+    use_cache_train = data_cfg.get("use_cache_train", use_cache)
     manifest = resolve_path(ROOT, data_cfg.get("manifest") or "manifest.csv")
     cache_dir = resolve_optional_path(
         ROOT,
         (data_cfg.get("cache_dir") or "data/cache/mel_3s_16k") if use_cache else None,
+    )
+    train_cache_dir = cache_dir if use_cache_train else None
+    eval_cache_dir = cache_dir if use_cache else None
+
+    augment_cfg = data_cfg.get("augment")
+    if augment_cfg is not None and not isinstance(augment_cfg, dict):
+        raise ValueError("data.augment must be a mapping when provided.")
+    augment_root = resolve_optional_path(
+        ROOT, (augment_cfg or {}).get("root") or "data/augment"
     )
 
     batch_size = loader_cfg.get("batch_size", 256)
@@ -223,10 +294,26 @@ def run_training(config: dict, config_path: Path) -> None:
     prefetch_factor = loader_cfg.get("prefetch_factor", 4)
     drop_last = loader_cfg.get("drop_last", True)
     balanced_sampler = loader_cfg.get("balanced_sampler", True)
+    allow_augment_workers = loader_cfg.get("allow_augment_workers", False)
+
+    augment_enabled = bool(augment_cfg and augment_cfg.get("enabled", False))
+    if augment_enabled and num_workers > 0 and not allow_augment_workers:
+        print(
+            "[warn] augmentations enabled; forcing num_workers=0 to avoid audio backend crashes."
+        )
+        num_workers = 0
+        persistent_workers = False
+        prefetch_factor = 2
+    elif augment_enabled and num_workers > 0 and allow_augment_workers:
+        print(
+            f"[info] augmentations enabled; keeping num_workers={num_workers} "
+            "(allow_augment_workers=true)."
+        )
 
     epochs = train_cfg.get("epochs", 10)
     clip_grad_norm = train_cfg.get("clip_grad_norm", 1.0)
     metrics_every = metrics_cfg.get("every", 1)
+    threshold_cfg = metrics_cfg.get("threshold")
     save_best = ckpt_cfg.get("save_best", True)
     save_last = ckpt_cfg.get("save_last", True)
     best_metric = ckpt_cfg.get("metric", "val_loss")
@@ -234,11 +321,12 @@ def run_training(config: dict, config_path: Path) -> None:
 
     lr = optim_cfg.get("lr", 3e-4)
     weight_decay = optim_cfg.get("weight_decay", 1e-2)
+    class_weights_cfg = train_cfg.get("class_weights")
 
     train_loader = build_loader(
         manifest=manifest,
         split="train",
-        cache_dir=cache_dir,
+        cache_dir=train_cache_dir,
         batch_size=batch_size,
         num_workers=num_workers,
         pin_memory=pin_memory,
@@ -246,13 +334,15 @@ def run_training(config: dict, config_path: Path) -> None:
         prefetch_factor=prefetch_factor,
         drop_last=drop_last,
         balanced_sampler=balanced_sampler,
+        augment_cfg=augment_cfg,
+        augment_root=augment_root,
     )
     val_loader = None
     try:
         val_loader = build_loader(
             manifest=manifest,
             split="val",
-            cache_dir=cache_dir,
+            cache_dir=eval_cache_dir,
             batch_size=batch_size,
             num_workers=num_workers,
             pin_memory=pin_memory,
@@ -260,6 +350,8 @@ def run_training(config: dict, config_path: Path) -> None:
             prefetch_factor=prefetch_factor,
             drop_last=False,
             balanced_sampler=False,
+            augment_cfg=augment_cfg,
+            augment_root=augment_root,
         )
         if len(val_loader) == 0:
             val_loader = None
@@ -268,7 +360,28 @@ def run_training(config: dict, config_path: Path) -> None:
 
     model = BaselineCNN().to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
-    crit = nn.CrossEntropyLoss()
+    class_weights = None
+    if class_weights_cfg:
+        if isinstance(class_weights_cfg, str):
+            mode = class_weights_cfg.lower()
+            class_weights = _compute_class_weights(train_loader.dataset, mode=mode)
+            if class_weights is None:
+                print("[warn] failed to infer class weights; skipping.")
+        elif (
+            isinstance(class_weights_cfg, (list, tuple)) and len(class_weights_cfg) == 2
+        ):
+            class_weights = torch.tensor(
+                [float(class_weights_cfg[0]), float(class_weights_cfg[1])],
+                dtype=torch.float32,
+            )
+        else:
+            raise ValueError(
+                "train.class_weights must be 'balanced', 'inverse', or [w0, w1]."
+            )
+    if class_weights is not None:
+        class_weights = class_weights.to(device)
+        print(f"[info] using class_weights: {class_weights.tolist()}")
+    crit = nn.CrossEntropyLoss(weight=class_weights)
     scaler = torch.amp.GradScaler(enabled=(device.type == "cuda"))
 
     wandb_run = init_wandb(wandb_cfg, config, config_path)
@@ -302,16 +415,17 @@ def run_training(config: dict, config_path: Path) -> None:
             or (save_best and best_metric.replace("/", "_").startswith("val_"))
         )
         if should_eval:
-            val_loss, val_acc = evaluate(
+            val_metrics = evaluate(
                 model=model,
                 loader=val_loader,
                 crit=crit,
                 device=device,
                 epoch=epoch,
                 epochs=epochs,
+                threshold_cfg=threshold_cfg,
             )
-            metrics["val/loss"] = val_loss
-            metrics["val/acc"] = val_acc
+            for key, value in val_metrics.items():
+                metrics[f"val/{key}"] = value
 
         if should_log:
             print(
@@ -333,7 +447,48 @@ def run_training(config: dict, config_path: Path) -> None:
                     ]
                 )
             )
-
+            if "val/loss" in metrics:
+                print(
+                    " | ".join(
+                        [
+                            "val_metrics",
+                            f"balanced_acc={metrics.get('val/balanced_acc', float('nan')):.4f}",
+                            f"roc_auc={metrics.get('val/roc_auc', float('nan')):.4f}",
+                            f"eer={metrics.get('val/eer', float('nan')):.4f}",
+                        ]
+                    )
+                )
+                print(
+                    " | ".join(
+                        [
+                            "val_class0",
+                            f"precision={metrics.get('val/precision0', float('nan')):.4f}",
+                            f"recall={metrics.get('val/recall0', float('nan')):.4f}",
+                            f"f1={metrics.get('val/f1_0', float('nan')):.4f}",
+                        ]
+                    )
+                )
+                print(
+                    " | ".join(
+                        [
+                            "val_class1",
+                            f"precision={metrics.get('val/precision1', float('nan')):.4f}",
+                            f"recall={metrics.get('val/recall1', float('nan')):.4f}",
+                            f"f1={metrics.get('val/f1_1', float('nan')):.4f}",
+                        ]
+                    )
+                )
+                print(
+                    " | ".join(
+                        [
+                            "val_confusion",
+                            f"tn={int(metrics.get('val/tn', 0))}",
+                            f"fp={int(metrics.get('val/fp', 0))}",
+                            f"fn={int(metrics.get('val/fn', 0))}",
+                            f"tp={int(metrics.get('val/tp', 0))}",
+                        ]
+                    )
+                )
             if wandb_run is not None:
                 wandb_run.log(metrics, step=epoch)
 
