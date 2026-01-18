@@ -239,4 +239,8 @@ audio_samples/
 audio_output_files/
 
 manifest.csv
+wandb
+checkpoints_metadata.json
+checkpoints
 data
+training_config.yml

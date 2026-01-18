@@ -1,5 +1,4 @@
 import numpy as np
-import pytest
 import sounddevice as sd
 
 from AI_dio.audio.microphone_input import microphone_input
