@@ -1,3 +1,4 @@
+import argparse
 import os
 from pathlib import Path
 from typing import Optional
@@ -25,6 +26,10 @@ def load_config(config_path: Optional[Path] = None) -> tuple[dict, Path]:
 
 
 if __name__ == "__main__":
-    config, config_path = load_config()
+    parser = argparse.ArgumentParser(description="Train from config.")
+    parser.add_argument("--config", type=Path, default=None)
+    args = parser.parse_args()
+
+    config, config_path = load_config(args.config)
     print(f"Loaded training config from {config_path}")
     run_training(config, config_path)

@@ -54,26 +54,12 @@ class AIDetectDataset(Dataset):
             self._mel, self._to_db = build_mel_transforms(self._params)
 
         if augment and not self._use_cache:
-            if augment_root is None:
-                raise ValueError("augment_root is required when augment=True")
             cfg = augment_cfg or {}
             self._augmenter = AudioAugmenter(
-                augment_root=Path(augment_root),
                 target_sr=target_sr,
                 chunk_length=self._chunk_length,
-                p_noise=float(cfg.get("p_noise", 0.6)),
-                p_music=float(cfg.get("p_music", 0.3)),
-                p_rir=float(cfg.get("p_rir", 0.3)),
-                snr_db_min=float(cfg.get("snr_db_min", -5.0)),
-                snr_db_max=float(cfg.get("snr_db_max", 15.0)),
-                music_snr_db_min=float(cfg.get("music_snr_db_min", -10.0)),
-                music_snr_db_max=float(cfg.get("music_snr_db_max", 10.0)),
-                gain_db_min=float(cfg.get("gain_db_min", -6.0)),
-                gain_db_max=float(cfg.get("gain_db_max", 6.0)),
-                allow_music_and_noise=bool(cfg.get("allow_music_and_noise", False)),
-                preload=bool(cfg.get("preload", False)),
-                preload_max_files=int(cfg.get("preload_max_files", 256)),
-                preload_segments_per_file=int(cfg.get("preload_segments_per_file", 1)),
+                cfg=cfg,
+                augment_root=None if augment_root is None else Path(augment_root),
             )
         elif augment and self._use_cache:
             feature_cfg = (augment_cfg or {}).get("feature_mask") or (

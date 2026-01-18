@@ -72,3 +72,16 @@ def mel_tokens_from_audio(
     if mel_db.dim() == 2:
         return mel_db.transpose(0, 1).contiguous()
     raise RuntimeError(f"Unexpected mel shape: {tuple(mel_db.shape)}")
+
+
+def params_from_config(cfg: dict | None) -> FeatureParams:
+    base = FeatureParams()
+    if not cfg:
+        return base
+    return FeatureParams(
+        chunk_duration=float(cfg.get("chunk_duration", base.chunk_duration)),
+        target_sr=int(cfg.get("target_sr", base.target_sr)),
+        win_ms=float(cfg.get("win_ms", base.win_ms)),
+        hop_ms=float(cfg.get("hop_ms", base.hop_ms)),
+        n_mels=int(cfg.get("n_mels", base.n_mels)),
+    )

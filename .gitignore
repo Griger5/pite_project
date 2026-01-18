@@ -243,3 +243,4 @@ wandb
 checkpoints_metadata.json
 checkpoints
 data
+training_config.yml

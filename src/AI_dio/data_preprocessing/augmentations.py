@@ -1,242 +1,247 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Optional
 
 import torch
-
-from AI_dio.data_preprocessing.audio_utils import (
-    load_audio_mono_resampled,
-    load_audio_segment_mono_resampled,
-)
-
-AUDIO_EXTS = (".wav", ".flac", ".mp3", ".ogg", ".m4a")
+import torch.nn.functional as F
+import torchaudio.functional as AF
 
 
-def _collect_audio_files(roots: Iterable[Path]) -> list[Path]:
-    files: list[Path] = []
-    for root in roots:
-        if not root.exists():
-            continue
-        for ext in AUDIO_EXTS:
-            files.extend(root.rglob(f"*{ext}"))
-    return files
+@dataclass
+class _CodecProfile:
+    name: str
+    cutoff_ratio: float
+    quant_bits: int
+    noise_floor: float
 
 
-def _load_audio(path: Path, target_sr: int) -> torch.Tensor:
-    return load_audio_mono_resampled(path, target_sr, target_length=None)
+_CODEC_PROFILES = {
+    "mp3": _CodecProfile(
+        name="mp3", cutoff_ratio=0.45, quant_bits=8, noise_floor=0.002
+    ),
+    "aac": _CodecProfile(
+        name="aac", cutoff_ratio=0.48, quant_bits=10, noise_floor=0.0015
+    ),
+    "opus": _CodecProfile(
+        name="opus", cutoff_ratio=0.40, quant_bits=7, noise_floor=0.003
+    ),
+}
 
 
-def _load_audio_segment(path: Path, target_sr: int, length: int) -> torch.Tensor:
-    return load_audio_segment_mono_resampled(
-        path, target_sr=target_sr, target_length=length, random_start=True
-    )
+def _ensure_mono(audio: torch.Tensor) -> torch.Tensor:
+    if audio.dim() == 1:
+        return audio.unsqueeze(0)
+    if audio.dim() == 2 and audio.size(0) == 1:
+        return audio
+    if audio.dim() == 2:
+        return audio.mean(dim=0, keepdim=True)
+    raise ValueError(f"Unexpected audio shape: {tuple(audio.shape)}")
 
 
 def _rms(audio: torch.Tensor) -> torch.Tensor:
     return torch.sqrt(torch.mean(audio**2) + 1e-8)
 
 
-def _mix_with_snr(
-    clean: torch.Tensor, noise: torch.Tensor, snr_db: float
-) -> torch.Tensor:
-    clean_rms = _rms(clean)
-    noise_rms = _rms(noise)
-    if float(noise_rms) <= 0.0:
-        return clean
-    scale = clean_rms / (noise_rms * (10.0 ** (snr_db / 20.0)))
-    mixed = clean + noise * scale
-    peak = float(mixed.abs().max())
-    if peak > 0.99:
-        mixed = mixed * (0.99 / peak)
-    return mixed
-
-
-def _apply_rir(audio: torch.Tensor, rir: torch.Tensor) -> torch.Tensor:
-    if rir.numel() == 0:
-        return audio
-    rir = rir / (rir.abs().max() + 1e-6)
-    rir = torch.flip(rir, dims=(1,))
-    rir_kernel = rir.unsqueeze(0)
-    audio_batch = audio.unsqueeze(0)
-    convolved = torch.nn.functional.conv1d(
-        audio_batch, rir_kernel, padding=rir.size(1) - 1
-    )
-    convolved = convolved[:, :, : audio.size(1)]
-    convolved = convolved.squeeze(0)
-    peak = float(convolved.abs().max())
-    if peak > 0.99:
-        convolved = convolved * (0.99 / peak)
-    return convolved
+def _quantize(audio: torch.Tensor, bits: int) -> torch.Tensor:
+    bits = max(int(bits), 2)
+    levels = float(2**bits - 1)
+    audio = torch.clamp(audio, -1.0, 1.0)
+    scaled = torch.round((audio + 1.0) * 0.5 * levels)
+    return scaled * (2.0 / levels) - 1.0
 
 
 class AudioAugmenter:
     def __init__(
         self,
         *,
-        augment_root: Path,
         target_sr: int,
         chunk_length: int,
-        p_noise: float = 0.6,
-        p_music: float = 0.3,
-        p_rir: float = 0.3,
-        snr_db_min: float = -5.0,
-        snr_db_max: float = 15.0,
-        music_snr_db_min: float = -10.0,
-        music_snr_db_max: float = 10.0,
-        gain_db_min: float = -6.0,
-        gain_db_max: float = 6.0,
-        allow_music_and_noise: bool = False,
-        preload: bool = False,
-        preload_max_files: int = 256,
-        preload_segments_per_file: int = 1,
+        cfg: Optional[dict] = None,
+        augment_root: Optional[Path] = None,
     ) -> None:
         self._target_sr = target_sr
         self._chunk_length = chunk_length
+        self._cfg = cfg or {}
 
-        self._p_noise = p_noise
-        self._p_music = p_music
-        self._p_rir = p_rir
-        self._snr_db_min = snr_db_min
-        self._snr_db_max = snr_db_max
-        self._music_snr_db_min = music_snr_db_min
-        self._music_snr_db_max = music_snr_db_max
-        self._gain_db_min = gain_db_min
-        self._gain_db_max = gain_db_max
-        self._allow_music_and_noise = allow_music_and_noise
+        self._p_codec = float(self._cfg.get("p_codec", 0.4))
+        self._p_resample = float(self._cfg.get("p_resample", 0.4))
+        self._p_bandlimit = float(self._cfg.get("p_bandlimit", 0.4))
+        self._p_compress = float(self._cfg.get("p_compress", 0.4))
+        self._p_reverb = float(self._cfg.get("p_reverb", 0.25))
+        self._p_noise = float(self._cfg.get("p_noise", 0.5))
 
-        noise_dirs = [
-            augment_root / "RIRS_NOISES",
-            augment_root / "DKITCHEN",
-            augment_root / "OOFFICE",
-            augment_root / "PCAFETER",
-            augment_root / "STRAFFIC",
-            augment_root / "TMETRO",
-        ]
-        music_dirs = [augment_root / "fma_small"]
-        rir_dirs = [augment_root / "simulated_rirs_16k"]
+        self._codec_types = list(self._cfg.get("codec_types") or ["mp3", "aac", "opus"])
+        self._codec_bitrate_min = int(self._cfg.get("codec_bitrate_kbps_min", 16))
+        self._codec_bitrate_max = int(self._cfg.get("codec_bitrate_kbps_max", 96))
 
-        self._noise_files = _collect_audio_files(noise_dirs)
-        self._music_files = _collect_audio_files(music_dirs)
-        self._rir_files = _collect_audio_files(rir_dirs)
-        self._noise_segments: list[torch.Tensor] = []
-        self._music_segments: list[torch.Tensor] = []
-        self._rir_segments: list[torch.Tensor] = []
+        self._resample_min = int(self._cfg.get("resample_hz_min", 8000))
+        self._resample_max = int(self._cfg.get("resample_hz_max", target_sr))
+        self._resample_rates = self._cfg.get("resample_rates")
 
-        if preload:
-            max_files = max(int(preload_max_files), 0)
-            segments_per_file = max(int(preload_segments_per_file), 1)
-            if max_files > 0:
-                self._noise_segments = self._preload_segments(
-                    self._noise_files, max_files, segments_per_file
-                )
-                self._music_segments = self._preload_segments(
-                    self._music_files, max_files, segments_per_file
-                )
-                self._rir_segments = self._preload_rirs(self._rir_files, max_files)
-                print(
-                    "[info] preloaded augment audio segments: "
-                    f"noise={len(self._noise_segments)}, "
-                    f"music={len(self._music_segments)}, "
-                    f"rir={len(self._rir_segments)}"
-                )
+        self._bandlimit_min = float(self._cfg.get("bandlimit_hz_min", 3000.0))
+        self._bandlimit_max = float(
+            self._cfg.get("bandlimit_hz_max", target_sr / 2.0 - 100.0)
+        )
+
+        self._compress_threshold = float(self._cfg.get("compress_threshold_db", -20.0))
+        self._compress_ratio = float(self._cfg.get("compress_ratio", 4.0))
+        self._compress_window_ms = float(self._cfg.get("compress_window_ms", 20.0))
+
+        self._reverb_ms_min = float(self._cfg.get("reverb_ms_min", 80.0))
+        self._reverb_ms_max = float(self._cfg.get("reverb_ms_max", 300.0))
+        self._reverb_decay_min = float(self._cfg.get("reverb_decay_min", 2.0))
+        self._reverb_decay_max = float(self._cfg.get("reverb_decay_max", 6.0))
+        self._reverb_reflections_min = int(self._cfg.get("reverb_reflections_min", 3))
+        self._reverb_reflections_max = int(self._cfg.get("reverb_reflections_max", 6))
+
+        self._noise_snr_min = float(self._cfg.get("noise_snr_db_min", -5.0))
+        self._noise_snr_max = float(self._cfg.get("noise_snr_db_max", 20.0))
+
+        self._apply_codec_fn = getattr(AF, "apply_codec", None)
 
     def _rand_uniform(self, low: float, high: float) -> float:
         if high <= low:
             return float(low)
         return float((high - low) * torch.rand(1).item() + low)
 
-    def _maybe_gain(self, audio: torch.Tensor) -> torch.Tensor:
-        gain_db = self._rand_uniform(self._gain_db_min, self._gain_db_max)
-        gain = 10.0 ** (gain_db / 20.0)
-        return audio * gain
+    def _rand_int(self, low: int, high: int) -> int:
+        if high <= low:
+            return int(low)
+        return int(torch.randint(low, high + 1, (1,)).item())
 
-    def _maybe_apply_rir(self, audio: torch.Tensor) -> torch.Tensor:
-        if self._p_rir <= 0.0 or (not self._rir_files and not self._rir_segments):
+    def _rand_choice(self, values: Iterable) -> Optional[object]:
+        values = list(values)
+        if not values:
+            return None
+        idx = int(torch.randint(0, len(values), (1,)).item())
+        return values[idx]
+
+    def _codec_corrupt(self, audio: torch.Tensor) -> torch.Tensor:
+        if self._p_codec <= 0.0 or not self._codec_types:
             return audio
-        if torch.rand(1).item() > self._p_rir:
+        if torch.rand(1).item() > self._p_codec:
             return audio
-        if self._rir_segments:
-            rir = self._pick_preloaded(self._rir_segments)
+        codec = str(self._rand_choice(self._codec_types) or "mp3")
+        bitrate = self._rand_int(self._codec_bitrate_min, self._codec_bitrate_max)
+        profile = _CODEC_PROFILES.get(codec, _CODEC_PROFILES["mp3"])
+
+        if self._apply_codec_fn is not None:
+            try:
+                if codec == "opus":
+                    return self._apply_codec_fn(
+                        audio,
+                        self._target_sr,
+                        format="ogg",
+                        encoder="opus",
+                        compression=bitrate,
+                    )
+                return self._apply_codec_fn(
+                    audio, self._target_sr, format=codec, compression=bitrate
+                )
+            except Exception:
+                pass
+
+        cutoff = min(
+            self._target_sr / 2.0 - 100.0, profile.cutoff_ratio * self._target_sr
+        )
+        audio = AF.lowpass_biquad(audio, self._target_sr, cutoff)
+        audio = _quantize(audio, profile.quant_bits)
+        noise = torch.randn_like(audio) * profile.noise_floor
+        return torch.clamp(audio + noise, -1.0, 1.0)
+
+    def _resample(self, audio: torch.Tensor) -> torch.Tensor:
+        if self._p_resample <= 0.0:
+            return audio
+        if torch.rand(1).item() > self._p_resample:
+            return audio
+        if self._resample_rates:
+            rate = int(self._rand_choice(self._resample_rates) or self._target_sr)
         else:
-            rir_path = self._rir_files[
-                int(torch.randint(0, len(self._rir_files), (1,)))
-            ]
-            rir = _load_audio(rir_path, self._target_sr)
-        return _apply_rir(audio, rir)
-
-    def _maybe_add_background(self, audio: torch.Tensor) -> torch.Tensor:
-        use_noise = self._p_noise > 0.0 and (self._noise_files or self._noise_segments)
-        use_music = self._p_music > 0.0 and (self._music_files or self._music_segments)
-        if not use_noise and not use_music:
+            rate = int(self._rand_uniform(self._resample_min, self._resample_max))
+        rate = max(1000, min(rate, self._target_sr))
+        if rate == self._target_sr:
             return audio
+        audio = AF.resample(audio, self._target_sr, rate)
+        return AF.resample(audio, rate, self._target_sr)
 
-        pick_noise = use_noise and torch.rand(1).item() < self._p_noise
-        pick_music = use_music and torch.rand(1).item() < self._p_music
+    def _bandlimit(self, audio: torch.Tensor) -> torch.Tensor:
+        if self._p_bandlimit <= 0.0:
+            return audio
+        if torch.rand(1).item() > self._p_bandlimit:
+            return audio
+        cutoff = self._rand_uniform(self._bandlimit_min, self._bandlimit_max)
+        cutoff = min(cutoff, self._target_sr / 2.0 - 100.0)
+        return AF.lowpass_biquad(audio, self._target_sr, cutoff)
 
-        if not self._allow_music_and_noise and pick_noise and pick_music:
-            if torch.rand(1).item() < 0.5:
-                pick_music = False
-            else:
-                pick_noise = False
+    def _compress(self, audio: torch.Tensor) -> torch.Tensor:
+        if self._p_compress <= 0.0:
+            return audio
+        if torch.rand(1).item() > self._p_compress:
+            return audio
+        window = max(1, int(self._target_sr * self._compress_window_ms / 1000.0))
+        pad = window // 2
+        power = audio.unsqueeze(0) ** 2
+        env = F.avg_pool1d(power, kernel_size=window, stride=1, padding=pad)
+        env = env[..., : audio.size(1)]
+        env = torch.sqrt(env + 1e-8)
+        env_db = 20.0 * torch.log10(env + 1e-8)
+        threshold = self._compress_threshold
+        ratio = max(self._compress_ratio, 1.0)
+        gain_db = torch.where(
+            env_db > threshold,
+            (threshold + (env_db - threshold) / ratio) - env_db,
+            torch.zeros_like(env_db),
+        )
+        gain = torch.pow(10.0, gain_db / 20.0)
+        return audio * gain.squeeze(0)
 
-        if pick_noise:
-            if self._noise_segments:
-                noise = self._pick_preloaded(self._noise_segments)
-            else:
-                noise_path = self._noise_files[
-                    int(torch.randint(0, len(self._noise_files), (1,)))
-                ]
-                noise = _load_audio_segment(
-                    noise_path, self._target_sr, self._chunk_length
-                )
-            snr_db = self._rand_uniform(self._snr_db_min, self._snr_db_max)
-            audio = _mix_with_snr(audio, noise, snr_db)
+    def _reverb(self, audio: torch.Tensor) -> torch.Tensor:
+        if self._p_reverb <= 0.0:
+            return audio
+        if torch.rand(1).item() > self._p_reverb:
+            return audio
+        length_ms = self._rand_uniform(self._reverb_ms_min, self._reverb_ms_max)
+        ir_len = max(8, int(self._target_sr * length_ms / 1000.0))
+        decay = self._rand_uniform(self._reverb_decay_min, self._reverb_decay_max)
+        t = torch.linspace(0, length_ms / 1000.0, ir_len)
+        ir = torch.exp(-decay * t)
+        ir[0] = 1.0
+        num_reflections = self._rand_int(
+            self._reverb_reflections_min, self._reverb_reflections_max
+        )
+        for _ in range(num_reflections):
+            delay = self._rand_int(1, ir_len - 1)
+            ir[delay] += float(self._rand_uniform(0.1, 0.5))
+        ir = ir / (ir.abs().max() + 1e-6)
+        kernel = ir.flip(0).view(1, 1, -1)
+        audio_batch = audio.unsqueeze(0)
+        convolved = F.conv1d(audio_batch, kernel, padding=ir_len - 1)
+        convolved = convolved[:, :, : audio.size(1)].squeeze(0)
+        return torch.clamp(convolved, -1.0, 1.0)
 
-        if pick_music:
-            if self._music_segments:
-                music = self._pick_preloaded(self._music_segments)
-            else:
-                music_path = self._music_files[
-                    int(torch.randint(0, len(self._music_files), (1,)))
-                ]
-                music = _load_audio_segment(
-                    music_path, self._target_sr, self._chunk_length
-                )
-            snr_db = self._rand_uniform(self._music_snr_db_min, self._music_snr_db_max)
-            audio = _mix_with_snr(audio, music, snr_db)
-
-        return audio
-
-    def _pick_preloaded(self, items: list[torch.Tensor]) -> torch.Tensor:
-        return items[int(torch.randint(0, len(items), (1,)).item())]
-
-    def _preload_segments(
-        self, files: list[Path], max_files: int, segments_per_file: int
-    ) -> list[torch.Tensor]:
-        if not files:
-            return []
-        count = min(len(files), max_files)
-        order = torch.randperm(len(files))[:count].tolist()
-        segments: list[torch.Tensor] = []
-        for idx in order:
-            path = files[idx]
-            for _ in range(segments_per_file):
-                segments.append(
-                    _load_audio_segment(path, self._target_sr, self._chunk_length)
-                )
-        return segments
-
-    def _preload_rirs(self, files: list[Path], max_files: int) -> list[torch.Tensor]:
-        if not files:
-            return []
-        count = min(len(files), max_files)
-        order = torch.randperm(len(files))[:count].tolist()
-        return [_load_audio(files[idx], self._target_sr) for idx in order]
+    def _add_noise(self, audio: torch.Tensor) -> torch.Tensor:
+        if self._p_noise <= 0.0:
+            return audio
+        if torch.rand(1).item() > self._p_noise:
+            return audio
+        snr_db = self._rand_uniform(self._noise_snr_min, self._noise_snr_max)
+        clean_rms = _rms(audio)
+        noise = torch.randn_like(audio)
+        noise_rms = _rms(noise)
+        if float(noise_rms) <= 0.0:
+            return audio
+        scale = clean_rms / (noise_rms * (10.0 ** (snr_db / 20.0)))
+        mixed = audio + noise * scale
+        return torch.clamp(mixed, -1.0, 1.0)
 
     def apply(self, audio: torch.Tensor) -> torch.Tensor:
-        audio = audio.clone()
-        audio = self._maybe_gain(audio)
-        audio = self._maybe_apply_rir(audio)
-        audio = self._maybe_add_background(audio)
-        return audio
+        audio = _ensure_mono(audio).clone()
+        audio = self._codec_corrupt(audio)
+        audio = self._resample(audio)
+        audio = self._bandlimit(audio)
+        audio = self._compress(audio)
+        audio = self._reverb(audio)
+        audio = self._add_noise(audio)
+        return torch.clamp(audio, -1.0, 1.0)

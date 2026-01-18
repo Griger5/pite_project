@@ -2,9 +2,6 @@ import math
 from pathlib import Path
 from typing import Optional
 
-import torch
-import torchaudio
-
 try:
     import soundfile as sf
 
@@ -12,15 +9,13 @@ try:
 except Exception:
     sf = None
     _HAS_SF = False
+import torch
+import torchaudio
+
+if _HAS_SF:
+    torchaudio.set_audio_backend("soundfile")
 
 _WARNED_AUDIO: set[str] = set()
-
-try:
-    backends = torchaudio.list_audio_backends()
-    if "soundfile" in backends:
-        torchaudio.set_audio_backend("soundfile")
-except Exception:
-    pass
 
 
 def crop_or_pad(audio_tensor: torch.Tensor, target_length: int) -> torch.Tensor:

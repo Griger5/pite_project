@@ -148,7 +148,6 @@ def _best_threshold_max_acc(
 
     tp = np.cumsum(sorted_labels == 1)
     fp = np.cumsum(sorted_labels == 0)
-    fn = total_pos - tp
     tn = total_neg - fp
     acc = (tp + tn) / max(sorted_labels.size, 1)
 
