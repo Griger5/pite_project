@@ -5,6 +5,7 @@ from audio_info import AudioInfo
 from controls import Controls
 from header import Header
 from plot_area import PlotArea
+from PySide6.QtCore import QUrl
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QApplication,
@@ -23,7 +24,7 @@ class SoundApp(QMainWindow):
         super().__init__()
 
         self.setWindowTitle("The Best Sound App!")
-        self.setFixedSize(900, 500)
+        self.setFixedSize(900, 600)
 
         main_widget = QWidget()
         layout = QVBoxLayout(main_widget)
@@ -43,7 +44,8 @@ class SoundApp(QMainWindow):
         self.controls.signal_status.connect(
             lambda status: self.header.status_name_label.setText(status)
         )
-        self.controls.signal_reset.connect(self.reset_info)
+        self.controls.signal_reset.connect(self.reset_all)
+        self.controls.signal_reset_info.connect(self.reset_info)
         self.controls.signal_audio_info.connect(self.display_audio_info)
         self.controls.signal_update_plots.connect(self.update_plots)
 
@@ -102,8 +104,6 @@ class SoundApp(QMainWindow):
         )
 
     def reset_info(self):
-        self.controls.file_path = None
-        self.controls.is_microphone_used = None
         self.header.file_name_label.setText("---")
         self.header.status_name_label.setText("---")
         self.audio_info.sample_rate_value_label.setText("---")
@@ -113,6 +113,17 @@ class SoundApp(QMainWindow):
         self.audio_info.loudness_value_label.setText("---")
         self.plot_area.waveform_label.clear()
         self.plot_area.spectrogram_label.clear()
+
+    def reset_all(self):
+        self.controls.file_path = None
+        self.controls.is_microphone_used = None
+        self.controls.current_time_label.setText("0:00")
+        self.controls.media.setSource(QUrl())
+        self.controls.max_time_label.setText("0:00")
+        self.controls.button_play.setHidden(False)
+        self.controls.button_pause.setHidden(True)
+        self.controls.set_media_enabled(False)
+        self.reset_info()
 
     @staticmethod
     def show_about():
