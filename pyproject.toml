@@ -25,7 +25,6 @@ dependencies = [
     "wandb>=0.23.1",
     "pyyaml>=6.0.1",
     "datasets>=2.19.0",
-    "pdoc>=16.0.0",
 ]
 
 
