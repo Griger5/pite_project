@@ -2,18 +2,9 @@ import math
 from pathlib import Path
 from typing import Optional
 
-try:
-    import soundfile as sf
-
-    _HAS_SF = True
-except Exception:
-    sf = None
-    _HAS_SF = False
+import soundfile as sf
 import torch
 import torchaudio
-
-if _HAS_SF:
-    torchaudio.set_audio_backend("soundfile")
 
 _WARNED_AUDIO: set[str] = set()
 
@@ -52,15 +43,13 @@ def _warn_once(filepath: str, exc: Exception) -> None:
 
 
 def _load_audio_raw(filepath: str | Path) -> tuple[torch.Tensor, int]:
-    if _HAS_SF:
-        data, sr = sf.read(
-            str(filepath),
-            dtype="float32",
-            always_2d=True,
-        )
-        audio_tensor = torch.from_numpy(data.T)
-        return audio_tensor, int(sr)
-    return torchaudio.load(str(filepath), channels_first=True)
+    data, sr = sf.read(
+        str(filepath),
+        dtype="float32",
+        always_2d=True,
+    )
+    audio_tensor = torch.from_numpy(data.T)
+    return audio_tensor, int(sr)
 
 
 def load_audio_mono_resampled(
@@ -83,34 +72,17 @@ def load_audio_segment_mono_resampled(
     filepath: str | Path, target_sr: int, target_length: int, random_start: bool = True
 ) -> torch.Tensor:
     try:
-        if _HAS_SF:
-            with sf.SoundFile(str(filepath)) as f:
-                sr = int(f.samplerate)
-                total_frames = int(len(f))
-                frames_needed = int(
-                    math.ceil(target_length * float(sr) / float(target_sr))
-                )
-                max_start = max(total_frames - frames_needed, 0)
-                start = 0
-                if random_start and max_start > 0:
-                    start = int(torch.randint(0, max_start + 1, (1,)).item())
-                f.seek(start)
-                data = f.read(frames=frames_needed, dtype="float32", always_2d=True)
-            audio_tensor = torch.from_numpy(data.T)
-        else:
-            info = torchaudio.info(str(filepath))
-            sr = int(info.sample_rate)
+        with sf.SoundFile(str(filepath)) as f:
+            sr = int(f.samplerate)
+            total_frames = int(len(f))
             frames_needed = int(math.ceil(target_length * float(sr) / float(target_sr)))
+            max_start = max(total_frames - frames_needed, 0)
             start = 0
-            max_start = max(int(info.num_frames) - frames_needed, 0)
             if random_start and max_start > 0:
                 start = int(torch.randint(0, max_start + 1, (1,)).item())
-            audio_tensor, _ = torchaudio.load(
-                str(filepath),
-                channels_first=True,
-                frame_offset=start,
-                num_frames=frames_needed,
-            )
+            f.seek(start)
+            data = f.read(frames=frames_needed, dtype="float32", always_2d=True)
+        audio_tensor = torch.from_numpy(data.T)
     except Exception as exc:
         _warn_once(str(filepath), exc)
         return torch.zeros((1, target_length), dtype=torch.float32)
