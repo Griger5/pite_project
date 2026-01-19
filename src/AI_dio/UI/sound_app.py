@@ -4,6 +4,7 @@ from pathlib import Path
 from audio_info import AudioInfo
 from controls import Controls
 from header import Header
+from model_info import ModelInfo
 from plot_area import PlotArea
 from PySide6.QtCore import QUrl
 from PySide6.QtGui import QAction
@@ -30,12 +31,14 @@ class SoundApp(QMainWindow):
         layout = QVBoxLayout(main_widget)
 
         middle_section = QHBoxLayout()
+        info_panel = QVBoxLayout()
 
         self.build_menu()
 
         self.header = Header()
         self.controls = Controls()
         self.audio_info = AudioInfo()
+        self.model_info = ModelInfo()
         self.plot_area = PlotArea()
 
         self.controls.signal_file_path.connect(
@@ -51,7 +54,9 @@ class SoundApp(QMainWindow):
 
         layout.addWidget(self.header)
         middle_section.addWidget(self.controls)
-        middle_section.addWidget(self.audio_info)
+        info_panel.addWidget(self.audio_info)
+        info_panel.addWidget(self.model_info)
+        middle_section.addLayout(info_panel)
         layout.addLayout(middle_section)
         layout.addWidget(self.plot_area)
 
@@ -103,6 +108,14 @@ class SoundApp(QMainWindow):
             Path(f"{ROOT}/audio_output_files/spectrogram.png")
         )
 
+    def reset_model_info(self):
+        self.model_info.result_value_label.setText("---")
+        self.model_info.score_value_label.setText("---")
+        self.model_info.min_value_label.setText("---")
+        self.model_info.max_value_label.setText("---")
+        self.model_info.windows_value_label.setText("---")
+        self.model_info.threshold_value_label.setText("---")
+
     def reset_info(self):
         self.header.file_name_label.setText("---")
         self.header.status_name_label.setText("---")
@@ -124,6 +137,7 @@ class SoundApp(QMainWindow):
         self.controls.button_pause.setHidden(True)
         self.controls.set_media_enabled(False)
         self.reset_info()
+        self.reset_model_info()
 
     @staticmethod
     def show_about():
