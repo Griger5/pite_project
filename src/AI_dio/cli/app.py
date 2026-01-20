@@ -34,16 +34,16 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "-sp",
-        "--plot_spectogram",
+        "--plot_spectrogram",
         action="store_true",
-        help="Generate and save a Mel spectogram of the given audio",
+        help="Generate and save a Mel spectrogram of the given audio",
     )
     parser.add_argument(
         "-spf",
-        "--spectogram_file",
+        "--spectrogram_file",
         type=str,
-        default="spectogram.png",
-        help="Filename for the spectogram. Default: spectogram.png",
+        default="spectrogram.png",
+        help="Filename for the spectrogram. Default: spectrogram.png",
     )
     parser.add_argument(
         "-m",
@@ -67,7 +67,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "-np",
-        "--no_paramaters",
+        "--no_parameters",
         action="store_true",
         help="Skip printing sound parameters",
     )
@@ -76,6 +76,7 @@ if __name__ == "__main__":
 
     if not args.file and not args.microphone:
         print('No action taken. Maybe try the "--help" command?')
+        exit()
 
     if args.file:
         audio, parameters = read_sound(Path(args.file))
@@ -93,11 +94,11 @@ if __name__ == "__main__":
         plot_waveform(audio, Path(args.waveform_file))
         print(f"Waveform saved to {args.waveform_file}")
 
-    if args.plot_spectogram:
-        spectogram = compute_log_mel_spectrogram(audio, parameters["sample_rate"])
+    if args.plot_specteogram:
+        spectrogram = compute_log_mel_spectrogram(audio, parameters["sample_rate"])
         plot_melspectrogram(
-            spectogram,
+            spectrogram,
             parameters["sample_rate"],
-            output_path=Path(args.spectogram_file),
+            output_path=Path(args.spectrogram_file),
         )
-        print(f"Spectogram saved to {args.spectogram_file}")
+        print(f"Spectogram saved to {args.spectrogram_file}")
