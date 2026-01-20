@@ -16,9 +16,19 @@ logging.getLogger().setLevel(logging.CRITICAL)
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Quick audio analysis")
 
-    parser.add_argument(
+    source_group = parser.add_mutually_exclusive_group(required=True)
+
+    source_group.add_argument(
         "-f", "--file", type=str, help="Audio file to analyse, .mp3 and .wav supported"
     )
+
+    source_group.add_argument(
+        "-m",
+        "--microphone",
+        action="store_true",
+        help="Record sound from the microphone instead of using a file",
+    )
+
     parser.add_argument(
         "-wv",
         "--plot_waveform",
@@ -46,12 +56,6 @@ if __name__ == "__main__":
         help="Filename for the spectrogram. Default: spectrogram.png",
     )
     parser.add_argument(
-        "-m",
-        "--microphone",
-        action="store_true",
-        help="Record sound from the microphone instead of using a file",
-    )
-    parser.add_argument(
         "-ms",
         "--microphone_seconds",
         type=int,
@@ -74,10 +78,6 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    if not args.file and not args.microphone:
-        print('No action taken. Maybe try the "--help" command?')
-        exit()
-
     if args.file:
         audio, parameters = read_sound(Path(args.file))
     elif args.microphone:
@@ -94,7 +94,7 @@ if __name__ == "__main__":
         plot_waveform(audio, Path(args.waveform_file))
         print(f"Waveform saved to {args.waveform_file}")
 
-    if args.plot_specteogram:
+    if args.plot_spectrogram:
         spectrogram = compute_log_mel_spectrogram(audio, parameters["sample_rate"])
         plot_melspectrogram(
             spectrogram,
