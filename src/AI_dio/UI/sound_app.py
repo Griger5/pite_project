@@ -49,7 +49,9 @@ class SoundApp(QMainWindow):
         )
         self.controls.signal_reset.connect(self.reset_all)
         self.controls.signal_reset_info.connect(self.reset_info)
+        self.controls.signal_reset_model_info.connect(self.reset_model_info)
         self.controls.signal_audio_info.connect(self.display_audio_info)
+        self.controls.signal_model_info.connect(self.display_model_info)
         self.controls.signal_update_plots.connect(self.update_plots)
 
         layout.addWidget(self.header)
@@ -102,6 +104,14 @@ class SoundApp(QMainWindow):
             f"{sound_params['loudness_db']:.2f} dB"
         )
 
+    def display_model_info(self, result):
+        self.model_info.result_value_label.setText(result.label)
+        self.model_info.spoof_value_label.setText(f"{result.score * 100:0.2f}%")
+        self.model_info.min_value_label.setText(f"{min(result.scores) * 100:0.2f}%")
+        self.model_info.max_value_label.setText(f"{max(result.scores) * 100:0.2f}%")
+        self.model_info.windows_value_label.setText(f"{result.window_sec} s")
+        self.model_info.threshold_value_label.setText(f"{result.threshold * 100}%")
+
     def update_plots(self):
         self.plot_area.update_waveform(Path(f"{ROOT}/audio_output_files/waveform.png"))
         self.plot_area.update_spectrogram(
@@ -110,7 +120,7 @@ class SoundApp(QMainWindow):
 
     def reset_model_info(self):
         self.model_info.result_value_label.setText("---")
-        self.model_info.score_value_label.setText("---")
+        self.model_info.spoof_value_label.setText("---")
         self.model_info.min_value_label.setText("---")
         self.model_info.max_value_label.setText("---")
         self.model_info.windows_value_label.setText("---")

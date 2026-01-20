@@ -18,9 +18,9 @@ class ModelInfo(QWidget):
         self.result_value_label = QLabel("---")
         self.result_value_label.setFixedWidth(64)
 
-        score_label = QLabel("Score: ")
-        score_label.setFixedWidth(60)
-        self.score_value_label = QLabel("---")
+        spoof_label = QLabel("Spoof: ")
+        spoof_label.setFixedWidth(60)
+        self.spoof_value_label = QLabel("---")
 
         min_label = QLabel("Min: ")
         min_label.setFixedWidth(63)
@@ -42,8 +42,8 @@ class ModelInfo(QWidget):
 
         first_row_layout.addWidget(result_label)
         first_row_layout.addWidget(self.result_value_label)
-        first_row_layout.addWidget(score_label)
-        first_row_layout.addWidget(self.score_value_label)
+        first_row_layout.addWidget(spoof_label)
+        first_row_layout.addWidget(self.spoof_value_label)
 
         second_row_layout.addWidget(min_label)
         second_row_layout.addWidget(self.min_value_label)

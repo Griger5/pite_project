@@ -21,9 +21,11 @@ class Controls(QWidget):
     signal_file_path = Signal(str)
     signal_status = Signal(str)
     signal_reset = Signal()
-    signal_audio_info = Signal(object)
-    signal_update_plots = Signal()
     signal_reset_info = Signal()
+    signal_reset_model_info = Signal()
+    signal_audio_info = Signal(object)
+    signal_model_info = Signal(object)
+    signal_update_plots = Signal()
 
     def __init__(self):
         super().__init__()
@@ -185,6 +187,9 @@ class Controls(QWidget):
 
         self.worker_audio.signal_status.connect(self.signal_status)
         self.worker_audio.signal_audio_info.connect(self.signal_audio_info)
+        self.worker_audio.signal_reset_info.connect(self.signal_reset_info)
+        self.worker_audio.signal_model_info.connect(self.signal_model_info)
+        self.worker_audio.signal_reset_model_info.connect(self.signal_reset_model_info)
         self.worker_audio.signal_update_plots.connect(self.signal_update_plots)
         self.worker_audio.signal_reset.connect(self.signal_reset)
         self.worker_audio.signal_reset_info.connect(self.signal_reset_info)
