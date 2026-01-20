@@ -4,17 +4,25 @@ from typing import Dict, Tuple
 
 import librosa
 import librosa.display
+import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 ROOT: Path = Path(__file__).resolve().parents[3]
+matplotlib.use("agg")
 
 
 def plot_waveform(
     audio_channel: np.ndarray,
     output_path: Path = ROOT / "audio_output_files/waveform.png",
 ) -> None:
+    """Plot a waveform and save it to disk.
+
+    Args:
+        audio_channel: 1D audio signal (float array).
+        output_path: Target PNG path for the rendered waveform.
+    """
     output_path.parent.mkdir(parents=True, exist_ok=True)
     plt.figure(figsize=(10, 4))
     plt.plot(audio_channel)
@@ -29,6 +37,14 @@ def plot_melspectrogram(
     hop_length: int = 512,
     output_path: Path = ROOT / "audio_output_files/spectrogram.png",
 ) -> None:
+    """Plot a log-mel spectrogram and save it to disk.
+
+    Args:
+        log_mel: 2D log-mel spectrogram array (mel bins x frames).
+        sample_rate: Audio sample rate in Hz.
+        hop_length: Hop length used when computing the spectrogram.
+        output_path: Target PNG path for the rendered spectrogram.
+    """
     output_path.parent.mkdir(parents=True, exist_ok=True)
     plt.figure(figsize=(10, 4))
     librosa.display.specshow(
@@ -47,6 +63,18 @@ def compute_log_mel_spectrogram(
     sample_frame_length: int = 2048,
     hop_length: int = 512,
 ) -> np.ndarray:
+    """Compute a log-mel spectrogram for a mono signal.
+
+    Args:
+        audio_data: 1D mono audio array.
+        sample_rate: Sampling rate in Hz.
+        mel_band_num: Number of mel filter banks.
+        sample_frame_length: FFT window size.
+        hop_length: Hop length between analysis frames.
+
+    Returns:
+        Log-mel spectrogram as a 2D NumPy array.
+    """
     S = librosa.feature.melspectrogram(
         y=audio_data,
         sr=sample_rate,
@@ -59,6 +87,16 @@ def compute_log_mel_spectrogram(
 
 
 def get_sound_parameters(data: np.ndarray, sr: int) -> Dict[str, float]:
+    """Calculate basic audio statistics.
+
+    Args:
+        data: Audio signal (mono or stereo). Stereo inputs are mixed down.
+        sr: Sampling rate in Hz.
+
+    Returns:
+        Dict with sample_rate, duration_sec, avg_volume (RMS), peak_amplitude,
+        and loudness_db.
+    """
     if len(data.shape) == 2:
         data = data.mean(axis=1)
     rms = float(np.sqrt(np.mean(data**2)))
@@ -85,6 +123,21 @@ def read_sound(
     plot_waveform_flag: bool = True,
     plot_melspectrogram_flag: bool = True,
 ) -> Tuple[np.ndarray, Dict[str, float]]:
+    """Load an audio file, optionally plot visuals, and return data with stats.
+
+    Args:
+        file: Path to the audio file to read.
+        plot_waveform_flag: Whether to plot a waveform plot.
+        plot_melspectrogram_flag: Whether to plot a log-mel spectrogram plot.
+
+    Returns:
+        Tuple of (audio_data, sound_parameters) where ``sound_parameters``
+        contains basic statistics.
+
+    Raises:
+        FileNotFoundError: If the file does not exist.
+        ValueError: If the file is empty, fails to load, or is too short.
+    """
     if not file.exists():
         raise FileNotFoundError(f"Audio file not found: {file}")
     if file.stat().st_size == 0:

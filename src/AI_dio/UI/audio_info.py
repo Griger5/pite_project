@@ -6,6 +6,7 @@ class AudioInfo(QWidget):
         super().__init__()
 
         info_box = QGroupBox("Audio Info")
+        info_box.setFixedWidth(300)
         box_layout = QVBoxLayout()
         first_row_layout = QHBoxLayout()
         second_row_layout = QHBoxLayout()
@@ -13,20 +14,21 @@ class AudioInfo(QWidget):
         main_layout = QVBoxLayout(self)
 
         sample_rate_label = QLabel("Sample rate: ")
-        sample_rate_label.setFixedWidth(67)
+        sample_rate_label.setFixedWidth(91)
         self.sample_rate_value_label = QLabel("---")
+        self.sample_rate_value_label.setFixedWidth(59)
 
         duration_label = QLabel("Duration: ")
-        duration_label.setFixedWidth(53)
+        duration_label.setFixedWidth(55)
         self.duration_value_label = QLabel("---")
 
         volume_label = QLabel("RMS (Volume): ")
-        volume_label.setFixedWidth(78)
+        volume_label.setFixedWidth(91)
         self.volume_value_label = QLabel("---")
-        self.volume_value_label.setFixedWidth(120)
+        self.volume_value_label.setFixedWidth(59)
 
         peak_amplitude_label = QLabel("Peak amplitude: ")
-        peak_amplitude_label.setFixedWidth(86)
+        peak_amplitude_label.setFixedWidth(91)
         self.peak_amplitude_label = QLabel("---")
 
         loudness_label = QLabel("Loudness: ")

@@ -14,11 +14,24 @@ def microphone_input(
     channels: int = 1,
     rate: int = 44100,
 ) -> Tuple[np.ndarray, int]:
+    """Record audio from the default microphone.
+
+    Args:
+        record_sec: Recording duration in seconds.
+        channels: Number of audio channels (1 = mono, 2 = stereo).
+        rate: Sampling rate in Hz.
+
+    Returns:
+        A tuple ``(audio, sample_rate)`` where ``audio`` is a 1D float32 NumPy
+        array and ``sample_rate`` is the recording sample rate.
+    """
     logging.info("Recording...")
     audio: np.ndarray = sd.rec(
         int(record_sec * rate), samplerate=rate, channels=channels, dtype="float32"
     )
     sd.wait()
+    if audio.ndim == 2:
+        audio = audio.mean(axis=1)
     logging.info("Finished recording.")
     return audio, rate
 
