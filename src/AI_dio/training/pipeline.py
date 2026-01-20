@@ -4,10 +4,10 @@ from typing import Literal, Optional
 
 import torch
 import torch.nn as nn
+import wandb
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from tqdm import tqdm
 
-import wandb
 from AI_dio.data_preprocessing.dataset import AIDetectDataset
 from AI_dio.data_preprocessing.features import FeatureParams, params_from_config
 from AI_dio.data_preprocessing.sources import read_manifest_rows, validate_manifest
