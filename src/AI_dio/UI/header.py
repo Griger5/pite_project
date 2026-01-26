@@ -14,7 +14,7 @@ class Header(QWidget):
         file_label.setFixedWidth(26)
         self.file_name_label = QLabel("---")
         status_label = QLabel("Status: ")
-        status_label.setFixedWidth(36)
+        status_label.setFixedWidth(42)
         self.status_name_label = QLabel("---")
 
         box_layout.addWidget(file_label)
