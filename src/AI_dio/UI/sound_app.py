@@ -166,7 +166,7 @@ class SoundApp(QMainWindow):
 if __name__ == "__main__":
     app = QApplication(sys.argv)
 
-    with open(f"{ROOT}/src/AI_dio/styles/gui_styles.qss", "r") as f:
+    with open(f"{ROOT}/src/AI_dio/UI/styles/gui_styles.qss", "r") as f:
         app.setStyleSheet(f.read())
 
     window = SoundApp()
