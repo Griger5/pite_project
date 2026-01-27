@@ -88,8 +88,17 @@ if __name__ == "__main__":
         action="store_true",
         help="Analyse the audio sample with AI, to check if it's real.",
     )
+    parser.add_argument(
+        "-chck",
+        "--checkpoint",
+        type=Path,
+        help="Path to the model (only valid with --ai_analysis). Default: checkpoints/model_best.pt",
+    )
 
     args = parser.parse_args()
+
+    if args.checkpoint and not args.ai_analysis:
+        parser.error("--checkpoint can only be used with --ai_analysis")
 
     if args.file:
         audio, parameters = read_sound(Path(args.file))
