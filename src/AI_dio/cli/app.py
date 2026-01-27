@@ -1,6 +1,9 @@
 import argparse
 import logging
+from dataclasses import fields
 from pathlib import Path
+
+import torch
 
 from AI_dio.audio.audio_file_reader import (
     compute_log_mel_spectrogram,
@@ -10,8 +13,12 @@ from AI_dio.audio.audio_file_reader import (
     read_sound,
 )
 from AI_dio.audio.microphone_input import microphone_input
+from AI_dio.inference import predict_audio, predict_file
 
 logging.getLogger().setLevel(logging.CRITICAL)
+
+ROOT = Path(__file__).parents[3].resolve()
+CHECKPOINT_PATH = ROOT / "checkpoints/model_best.pt"
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Quick audio analysis")
@@ -75,8 +82,23 @@ if __name__ == "__main__":
         action="store_true",
         help="Skip printing sound parameters",
     )
+    parser.add_argument(
+        "-ai",
+        "--ai_analysis",
+        action="store_true",
+        help="Analyse the audio sample with AI, to check if it's real.",
+    )
+    parser.add_argument(
+        "-chck",
+        "--checkpoint",
+        type=Path,
+        help="Path to the model (only valid with --ai_analysis). Default: checkpoints/model_best.pt",
+    )
 
     args = parser.parse_args()
+
+    if args.checkpoint and not args.ai_analysis:
+        parser.error("--checkpoint can only be used with --ai_analysis")
 
     if args.file:
         audio, parameters = read_sound(Path(args.file))
@@ -89,6 +111,23 @@ if __name__ == "__main__":
     if not args.no_parameters:
         for key, value in parameters.items():
             print(f"{key}: {value}")
+
+    if args.ai_analysis:
+        checkpoint_path = args.checkpoint if args.checkpoint else CHECKPOINT_PATH
+
+        if args.file:
+            result = predict_file(checkpoint=checkpoint_path, wav=args.file)
+        elif args.microphone:
+            audio_tensor = torch.tensor(audio)
+            result = predict_audio(
+                checkpoint=checkpoint_path, audio=audio_tensor, sample_rate=rate
+            )
+
+        print("AI Result:")
+        for field in fields(result):
+            if field.name == "wav":
+                continue
+            print(f"{field.name}:", getattr(result, field.name))
 
     if args.plot_waveform:
         plot_waveform(audio, Path(args.waveform_file))
