@@ -113,12 +113,14 @@ if __name__ == "__main__":
             print(f"{key}: {value}")
 
     if args.ai_analysis:
+        checkpoint_path = args.checkpoint if args.checkpoint else CHECKPOINT_PATH
+
         if args.file:
-            result = predict_file(checkpoint=CHECKPOINT_PATH, wav=args.file)
+            result = predict_file(checkpoint=checkpoint_path, wav=args.file)
         elif args.microphone:
             audio_tensor = torch.tensor(audio)
             result = predict_audio(
-                checkpoint=CHECKPOINT_PATH, audio=audio_tensor, sample_rate=rate
+                checkpoint=checkpoint_path, audio=audio_tensor, sample_rate=rate
             )
 
         print("AI Result:")
